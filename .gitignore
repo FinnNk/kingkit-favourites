@@ -1,0 +1,15 @@
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# Build / packaging output
+*.zip
+*.crx
+*.pem
+dist/
+
+# Node (only if tooling is ever added)
+node_modules/

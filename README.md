@@ -68,6 +68,9 @@ roughly once a day and flags what changed:
 - **Copy as text** — the Copy button puts the currently visible list (after search, filters and sort) on the
   clipboard as markdown, one line per kit with price, year and links — ready to paste into a forum post or a
   gift list.
+- **Find more like this** — the magnifier button on each card offers two one-click hunts: a KingKit Kit Finder
+  search pre-filled with the kit's manufacturer and scale, and the kit's Scalemates topic page (every boxing of
+  that subject across all brands).
 - **Notes** — add a private reminder to any kit ("wanted for the winter build", "check postage").
 - **Remove** individual items, or clear the whole list — both undoable.
 - **Open in a full tab** for a wider, multi-column view when the list gets long.

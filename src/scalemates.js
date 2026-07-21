@@ -113,15 +113,16 @@
     // Topic headers: track the last one preceding each result block.
     function topicBefore(prefix) {
       var m, last = null;
-      var re = /<h4><a href="\/topics\/[^"]*"[^>]*>([^<]*)<\/a>\s*(?:<span class=ut>([^<]*)<\/span>)?([\s\S]*?)<\/h4>/g;
+      var re = /<h4><a href="(\/topics\/[^"]*)"[^>]*>([^<]*)<\/a>\s*(?:<span class=ut>([^<]*)<\/span>)?([\s\S]*?)<\/h4>/g;
       while ((m = re.exec(prefix)) !== null) {
-        var tail = m[3] || '';
+        var tail = m[4] || '';
         var path = [];
         var pm, pre = /fkGROUPS[^>]*>([^<]+)<\/a>|fkCATNAME[^>]*>([^<]+)<\/a>/g;
         while ((pm = pre.exec(tail)) !== null) path.push(decodeEntities(pm[1] || pm[2]));
         last = {
-          name: decodeEntities(m[1]),
-          alt: decodeEntities(m[2] || ''),
+          url: ORIGIN + decodeEntities(m[1]),
+          name: decodeEntities(m[2]),
+          alt: decodeEntities(m[3] || ''),
           path: path.join(' '),
           // The topic header's flag is the subject's nation (e.g. DR, GB, JP).
           nation: (tail.match(/flags[^"]*"[^>]*title="([A-Z]{2,3})"/) || [])[1] || '',
@@ -336,6 +337,7 @@
         sm.topicPath = cand.topic.path || '';
         sm.topicYear = cand.topic.year || '';
         sm.topicNation = cand.topic.nation || '';
+        sm.topicUrl = cand.topic.url || '';
       }
     }
     return sm;

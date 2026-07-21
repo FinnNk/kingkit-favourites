@@ -19,7 +19,8 @@
       sm: { status: 'matched', at: now - day, url: 'https://www.scalemates.com/kits/roden-434-junkers-di--122091',
             year: '2007', subject: 'Junkers D.I', brand: 'Roden', number: '434', scale: '1:48',
             era: 'World War I', variant: 'short-fuselage version',
-            topicName: 'Junkers D.I', topicAlt: 'Junkers J 9', topicPath: 'Aircraft Propeller', topicYear: '1918', topicNation: 'DR' },
+            topicName: 'Junkers D.I', topicAlt: 'Junkers J 9', topicPath: 'Aircraft Propeller', topicYear: '1918', topicNation: 'DR',
+            topicUrl: 'https://www.scalemates.com/topics/topic.php?id=2660' },
       // The watcher spotted a price drop an hour ago; the stored prices
       // already reflect the new figure and the alert is still unread.
       prices: [{ label: 'New', current: '£14.99', old: '', note: '' }],
@@ -75,6 +76,8 @@
   chrome.storage.local._bag['kkf.vocab'] = {
     brands: ['Airfix', 'Eduard', 'Roden', 'Skybow', 'Takom'],
     categories: ['Aircraft Model Kits', 'Military Model Kits', 'Model Ships Kits'],
+    brandIds: { airfix: '2', eduard: '77', roden: '412', skybow: '509' }, // takom absent: exercises the text-search fallback
+    categoryIds: { 'aircraft model kits': '26', 'military model kits': '11', 'model ships kits': '17' },
     fetchedAt: Date.now()
   };
 })();

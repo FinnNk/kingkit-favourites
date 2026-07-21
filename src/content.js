@@ -136,23 +136,41 @@
       .filter(function (value) { return value && !/^All /i.test(value); });
   }
 
+  /** Kit Finder options as {lowercased name -> value id}, for deep links. */
+  function optionIds(root) {
+    var map = {};
+    if (!root) return map;
+    Array.prototype.forEach.call(root.querySelectorAll('option'), function (opt) {
+      var name = text(opt);
+      var id = opt.getAttribute('value') || '';
+      if (name && id && !/^All /i.test(name)) map[name.toLowerCase()] = id;
+    });
+    return map;
+  }
+
   /**
    * Cache KingKit's manufacturer and category lists so the manager can group
-   * favourites by brand. Categories are server-rendered in the Kit Finder
-   * form; the manufacturer list is only inlined on shop.php, so elsewhere we
-   * ask the same endpoint the site's own script uses.
+   * favourites by brand and build pre-filled Kit Finder links. Categories are
+   * server-rendered in the Kit Finder form; the manufacturer list is only
+   * inlined on shop.php, so elsewhere we ask the same endpoint the site's own
+   * script uses.
    */
   async function harvestVocab() {
     if (!store.vocabIsStale(await store.getVocab())) return;
 
-    var categories = optionTexts(document.querySelector('select[name="searchCategory"]'));
-    var brands = optionTexts(document.querySelector('select[name="searchBrands"]'));
+    var catSelect = document.querySelector('select[name="searchCategory"]');
+    var brandSelect = document.querySelector('select[name="searchBrands"]');
+    var categories = optionTexts(catSelect);
+    var categoryIds = optionIds(catSelect);
+    var brands = optionTexts(brandSelect);
+    var brandIds = optionIds(brandSelect);
 
     if (brands.length < 50) {
       try {
         var res = await fetch('/ajax/get-brands.php', { credentials: 'same-origin' });
         var doc = new DOMParser().parseFromString('<select>' + (await res.text()) + '</select>', 'text/html');
         brands = optionTexts(doc);
+        brandIds = optionIds(doc);
       } catch (err) {
         // Offline or the endpoint moved — brands fall back to the title's
         // first word, so this is not worth surfacing.
@@ -160,7 +178,10 @@
     }
 
     if (brands.length && categories.length) {
-      await store.setVocab({ brands: brands, categories: categories });
+      await store.setVocab({
+        brands: brands, categories: categories,
+        brandIds: brandIds, categoryIds: categoryIds
+      });
     }
   }
 

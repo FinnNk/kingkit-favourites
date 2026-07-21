@@ -32,6 +32,8 @@
       <option value="title-desc">Title Z–A</option>
       <option value="price-asc">Price low–high</option>
       <option value="price-desc">Price high–low</option>
+      <option value="year-desc">Release year (new-old)</option>
+      <option value="year-asc">Release year (old-new)</option>
     </select>
     <button type="button" class="icon-btn" id="view-toggle" title="Switch layout" aria-label="Switch layout">
       <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-grid"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg>
@@ -43,6 +45,7 @@
     <select id="f-brand" aria-label="Filter by manufacturer"></select>
     <select id="f-scale" aria-label="Filter by scale"></select>
     <select id="f-category" aria-label="Filter by category"></select>
+    <select id="f-status" aria-label="Filter by status"></select>
     <button type="button" class="icon-btn icon-btn--sm" id="f-clear" title="Clear filters" aria-label="Clear filters" hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
@@ -63,11 +66,20 @@
       <div class="fav__body">
         <a class="fav__title" target="_blank" rel="noopener"></a>
         <p class="fav__details"></p>
+        <p class="fav__alert" hidden>
+          <span class="fav__alert-text"></span>
+          <button type="button" class="fav__alert-x js-alert-seen" title="Mark alerts as read" aria-label="Mark alerts as read">✕</button>
+        </p>
         <p class="fav__prices"></p>
         <p class="fav__note-text" hidden></p>
         <div class="fav__foot">
           <time class="fav__added"></time>
           <div class="fav__actions">
+            <select class="fav__status js-status" title="Kit status" aria-label="Kit status">
+              <option value="wanted">Wanted</option>
+              <option value="bought">Bought</option>
+              <option value="built">Built</option>
+            </select>
             <a class="icon-btn icon-btn--sm fav__sm-link js-sm-link" target="_blank" rel="noopener" title="View on Scalemates" aria-label="View on Scalemates" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7"/></svg>
             </a>
@@ -91,6 +103,7 @@
   <footer class="footer">
     <div class="footer__row">
       <button type="button" class="btn" id="export">Export</button>
+      <button type="button" class="btn" id="copy" title="Copy the visible list as shareable text">Copy</button>
       <button type="button" class="btn" id="import">Import</button>
       <button type="button" class="btn btn--danger" id="clear">Clear all</button>
       <input type="file" id="import-file" accept="application/json,.json" hidden>
@@ -105,6 +118,9 @@
       </label>
       <label class="storage" title="Look new favourites up on scalemates.com to add release year and subject details">
         <input type="checkbox" id="sm-enabled"> Scalemates
+      </label>
+      <label class="storage" title="Check saved kits for price and stock changes in the background">
+        <input type="checkbox" id="watch-enabled"> Price watch
       </label>
       <span class="meter" id="usage"></span>
     </div>

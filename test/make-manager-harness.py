@@ -22,6 +22,7 @@ html = html.replace(
         '<script src="../src/semantic.js"></script>',
         '<script src="seed-sem.js"></script>',
         '<script src="../src/manager.js"></script>',
+        '<script src="manager-tests.js"></script>',
     ]))
 assert 'mock-chrome.js' in html, 'script block in src/manager.html changed; update this generator'
 

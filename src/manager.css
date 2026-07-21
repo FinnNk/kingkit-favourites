@@ -360,7 +360,29 @@ body.view-list .fav__title { -webkit-line-clamp: 2; font-size: 13px; }
 .btn--sm { padding: 5px 9px; font-size: 12px; }
 .btn--danger { margin-left: auto; color: var(--accent); }
 .btn--danger:hover { border-color: var(--accent); background: var(--accent-soft); }
-.btn.is-confirming { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Two-step clear with an arming sweep. The first click turns the button grey
+   and a red fill slides across (background-size animation, so swapping the
+   label text mid-flight is safe); clicks are ignored until the button is
+   entirely red. Guards against an accidental double click. */
+.btn.is-confirming {
+  background-color: #6b7280;
+  background-image: linear-gradient(var(--accent), var(--accent));
+  background-repeat: no-repeat;
+  background-size: 0% 100%;
+  border-color: transparent;
+  color: #fff;
+  transition: background-size 0.85s linear;
+}
+
+.btn.is-confirming.is-arming { background-size: 100% 100%; }
+.btn.is-confirming.is-armed { background-color: var(--accent); background-size: 100% 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* No sweep: stay grey while the lockout runs, turn red only once armed. */
+  .btn.is-confirming { transition: none; }
+  .btn.is-confirming.is-arming:not(.is-armed) { background-size: 0% 100%; }
+}
 
 .storage { display: flex; align-items: center; gap: 6px; }
 .storage select { padding: 3px 6px; font-size: 11.5px; }

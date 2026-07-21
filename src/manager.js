@@ -677,26 +677,52 @@
     el.importFile.value = '';
   });
 
-  // Two-step confirmation — a native confirm() can dismiss the popup.
-  var clearTimer = null;
+  // Two-step confirmation with an arming delay — a native confirm() can
+  // dismiss the popup, and an instant second step would make an accidental
+  // double click destructive. The first click starts a red sweep across the
+  // button; clicks during the sweep are ignored, and only once the button is
+  // fully red does a click actually clear.
+  var CLEAR_ARM_MS = 850;    // matches the background-size transition
+  var CLEAR_RESET_MS = 4000; // armed window before falling back to idle
+  var clearState = 'idle';   // 'idle' | 'arming' | 'armed'
+  var clearArmTimer = null;
+  var clearResetTimer = null;
+
   el.clearBtn.addEventListener('click', async function () {
-    if (!el.clearBtn.classList.contains('is-confirming')) {
+    if (clearState === 'arming') return; // the accidental double click
+
+    if (clearState === 'idle') {
+      clearState = 'arming';
+      el.clearBtn.textContent = 'Confirm clear';
       el.clearBtn.classList.add('is-confirming');
-      el.clearBtn.textContent = 'Tap again to confirm';
-      clearTimer = setTimeout(resetClear, 4000);
+      // Force a reflow so the 0%-width fill is committed before the sweep
+      // class lands — otherwise the transition can start from the end state.
+      // (A reflow, not requestAnimationFrame: rAF never fires in a hidden
+      // document, and correctness must not depend on rendering.)
+      void el.clearBtn.offsetWidth;
+      el.clearBtn.classList.add('is-arming');
+      clearArmTimer = setTimeout(function () {
+        clearState = 'armed';
+        el.clearBtn.classList.add('is-armed');
+        clearResetTimer = setTimeout(resetClear, CLEAR_RESET_MS);
+      }, CLEAR_ARM_MS);
       return;
     }
-    clearTimeout(clearTimer);
+
+    // Armed: this click is the confirmation.
     var backup = state.favourites.slice();
-    await store.clear();
     resetClear();
+    await store.clear();
     toast('Cleared ' + backup.length + ' favourites', function () {
       store.importAll(backup);
     });
   });
 
   function resetClear() {
-    el.clearBtn.classList.remove('is-confirming');
+    clearTimeout(clearArmTimer);
+    clearTimeout(clearResetTimer);
+    clearState = 'idle';
+    el.clearBtn.classList.remove('is-confirming', 'is-arming', 'is-armed');
     el.clearBtn.textContent = 'Clear all';
   }
 

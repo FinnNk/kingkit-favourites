@@ -326,7 +326,11 @@
         toast('Saved to favourites', function () { store.remove(result.id); });
         enrich(fav);
       } else {
-        toast('Removed from favourites', function () { store.add(fav); });
+        // Undo restores the record that was actually removed — notes, status,
+        // Scalemates data and watch history included — never the bare scrape
+        // payload from the button.
+        var removed = result.removed || fav;
+        toast('Removed from favourites', function () { store.add(removed); });
       }
     }).catch(function (err) {
       btn.classList.remove('is-busy');

@@ -21,6 +21,7 @@
     list: document.getElementById('list'),
     template: document.getElementById('fav-template'),
     exportBtn: document.getElementById('export'),
+    copyBtn: document.getElementById('copy'),
     importBtn: document.getElementById('import'),
     importFile: document.getElementById('import-file'),
     clearBtn: document.getElementById('clear'),
@@ -33,11 +34,13 @@
     filterClear: document.getElementById('f-clear')
   };
 
-  // Facet key -> its <select> and the label for "no filter".
+  // Facet key -> its <select> and the label for "no filter". `format` (when
+  // present) turns a stored value into its display label.
   var FACETS = [
     { key: 'brand', el: document.getElementById('f-brand'), all: 'All manufacturers' },
     { key: 'scale', el: document.getElementById('f-scale'), all: 'All scales' },
-    { key: 'category', el: document.getElementById('f-category'), all: 'All categories' }
+    { key: 'category', el: document.getElementById('f-category'), all: 'All categories' },
+    { key: 'status', el: document.getElementById('f-status'), all: 'All statuses', format: capitalise }
   ];
 
   var state = {
@@ -46,7 +49,8 @@
     vocab: null,
     query: '',
     sort: 'added-desc',
-    filters: { brand: '', scale: '', category: '' },
+    filters: { brand: '', scale: '', category: '', status: '' },
+    visible: [], // the array behind the current render, for Copy
     // Dense-vector results for the current query: Map id -> cosine sim.
     semantic: { query: '', sims: new Map() },
     semanticToken: 0
@@ -107,10 +111,37 @@
     return Math.round(n / 1024) + ' KB';
   }
 
+  function capitalise(value) {
+    var s = String(value == null ? '' : value);
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  /** Scalemates release year as a number, or null when unknown. */
+  function releaseYear(fav) {
+    var year = parseInt(fav.sm && fav.sm.status === 'matched' && fav.sm.year, 10);
+    return isNaN(year) ? null : year;
+  }
+
   /* --------------------------------------------------------------- render */
 
+  /**
+   * The stored facets plus the status, which lives on the favourite itself
+   * (absent means 'wanted') — merged here so the faceted machinery treats it
+   * like any other facet without storage.js needing to know about it.
+   * Status is clamped to the known values: imported or hand-edited data can
+   * carry anything ("Wanted", "ordered"), and an unknown value would derail
+   * the facet dropdown and the card select alike.
+   */
+  var STATUSES = ['wanted', 'bought', 'built'];
+  function statusOf(fav) {
+    var s = String(fav.status || 'wanted').toLowerCase();
+    return STATUSES.indexOf(s) !== -1 ? s : 'wanted';
+  }
+
   function facetsOf(fav) {
-    return state.facets.get(fav.id) || {};
+    return Object.assign({}, state.facets.get(fav.id) || {}, {
+      status: statusOf(fav)
+    });
   }
 
   /**
@@ -330,6 +361,16 @@
     return da - db || String(a).localeCompare(String(b), 'en-GB');
   }
 
+  /** Lifecycle order rather than alphabetical: wanted, bought, built. */
+  var STATUS_ORDER = ['wanted', 'bought', 'built'];
+  function byStatus(a, b) {
+    var ia = STATUS_ORDER.indexOf(a);
+    var ib = STATUS_ORDER.indexOf(b);
+    if (ia === -1) ia = STATUS_ORDER.length;
+    if (ib === -1) ib = STATUS_ORDER.length;
+    return ia - ib || String(a).localeCompare(String(b), 'en-GB');
+  }
+
   /**
    * Rebuild the facet dropdowns from the favourites themselves, so only values
    * actually present are offered — with a count beside each.
@@ -347,8 +388,10 @@
           counts.set(value, (counts.get(value) || 0) + 1);
         });
 
-      var values = Array.from(counts.keys())
-        .sort(facet.key === 'scale' ? byScale : function (a, b) { return a.localeCompare(b, 'en-GB'); });
+      var order = function (a, b) { return a.localeCompare(b, 'en-GB'); };
+      if (facet.key === 'scale') order = byScale;
+      if (facet.key === 'status') order = byStatus;
+      var values = Array.from(counts.keys()).sort(order);
 
       // Keep the active choice selectable even once nothing matches it.
       var current = state.filters[facet.key];
@@ -358,7 +401,8 @@
       select.textContent = '';
       select.appendChild(new Option(facet.all, ''));
       values.forEach(function (value) {
-        select.appendChild(new Option(value + ' (' + (counts.get(value) || 0) + ')', value));
+        var label = facet.format ? facet.format(value) : value;
+        select.appendChild(new Option(label + ' (' + (counts.get(value) || 0) + ')', value));
       });
       select.value = current;
       select.disabled = !values.length;
@@ -378,6 +422,17 @@
         case 'title-desc': return (b.title || '').localeCompare(a.title || '', 'en-GB');
         case 'price-asc': return priceValue(a) - priceValue(b);
         case 'price-desc': return priceValue(b) - priceValue(a);
+        case 'year-desc':
+        case 'year-asc': {
+          // Kits without a known release year always sink to the bottom,
+          // whichever direction the years themselves run in.
+          var ya = releaseYear(a);
+          var yb = releaseYear(b);
+          if (ya === null && yb === null) return (b.addedAt || 0) - (a.addedAt || 0);
+          if (ya === null) return 1;
+          if (yb === null) return -1;
+          return (mode === 'year-asc' ? ya - yb : yb - ya) || (b.addedAt || 0) - (a.addedAt || 0);
+        }
         default: return (b.addedAt || 0) - (a.addedAt || 0);
       }
     });
@@ -413,6 +468,40 @@
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+
+  /* --------------------------------------------------------- watch alerts */
+
+  // The price watcher (src/watch.js) appends alerts to fav.watch.alerts,
+  // newest first. Everything here is defensive: favourites saved before the
+  // watcher existed carry no watch data at all.
+  var ALERT_CLASS = {
+    'price-drop': 'fav__alert--drop',
+    'price-rise': 'fav__alert--muted',
+    'restock': 'fav__alert--restock',
+    'out-of-stock': 'fav__alert--muted',
+    'gone': 'fav__alert--gone'
+  };
+
+  function newestUnseenAlert(fav) {
+    var alerts = fav.watch && Array.isArray(fav.watch.alerts) ? fav.watch.alerts : [];
+    for (var i = 0; i < alerts.length; i += 1) {
+      if (alerts[i] && !alerts[i].seen) return alerts[i];
+    }
+    return null;
+  }
+
+  function alertText(alert) {
+    var label = alert.label ? alert.label + ' ' : '';
+    var was = alert.from ? ' (was ' + alert.from + ')' : '';
+    switch (alert.kind) {
+      case 'price-drop': return label + '↓ ' + (alert.to || '') + was;
+      case 'price-rise': return label + '↑ ' + (alert.to || '') + was;
+      case 'restock': return label ? label + 'back in stock' : 'Back in stock';
+      case 'out-of-stock': return label ? label + 'out of stock' : 'Out of stock';
+      case 'gone': return 'No longer listed';
+      default: return label + (alert.kind || 'updated');
+    }
   }
 
   function buildCard(fav) {
@@ -455,6 +544,16 @@
       smLink.title = 'View on Scalemates' + (sm.year ? ' (released ' + sm.year + ')' : '');
     }
 
+    var alertEl = node.querySelector('.fav__alert');
+    var alert = newestUnseenAlert(fav);
+    if (alert) {
+      alertEl.querySelector('.fav__alert-text').textContent = alertText(alert);
+      alertEl.classList.add(ALERT_CLASS[alert.kind] || 'fav__alert--muted');
+      alertEl.hidden = false;
+    } else {
+      alertEl.remove(); // cards without alerts keep exactly their old layout
+    }
+
     var prices = node.querySelector('.fav__prices');
     var priceHtml = renderPrices(fav);
     if (priceHtml) prices.innerHTML = priceHtml; else prices.hidden = true;
@@ -469,6 +568,11 @@
     added.textContent = relativeTime(fav.addedAt);
     added.dateTime = fav.addedAt ? new Date(fav.addedAt).toISOString() : '';
     added.title = 'Saved ' + fullDate(fav.addedAt);
+
+    var status = node.querySelector('.js-status');
+    status.value = statusOf(fav);
+    if (statusOf(fav) === 'bought') status.classList.add('is-bought');
+    if (statusOf(fav) === 'built') status.classList.add('is-built');
 
     node.querySelector('.js-note-input').value = fav.note || '';
     node.querySelector('.js-sm-input').value = (fav.sm && fav.sm.url) || '';
@@ -504,6 +608,7 @@
 
     var visible = searched.filter(function (f) { return passesFilters(f, null); });
     if (!query) visible = sortFavourites(visible, state.sort);
+    state.visible = visible;
 
     el.list.textContent = '';
     if (!visible.length) {
@@ -518,6 +623,7 @@
       ? String(state.favourites.length)
       : visible.length + '/' + state.favourites.length;
     el.exportBtn.disabled = !state.favourites.length;
+    el.copyBtn.disabled = !visible.length;
     el.clearBtn.disabled = !state.favourites.length;
   }
 
@@ -596,6 +702,15 @@
     if (!card) return;
     var id = card.dataset.id;
 
+    if (event.target.closest('.js-alert-seen')) {
+      // One click marks every alert on this favourite as read; the chip
+      // disappears when the storage change re-renders the list. The store
+      // operates on the alerts as stored right now, not this render's
+      // snapshot — the watcher may have written since.
+      store.markAlertsSeen(id);
+      return;
+    }
+
     if (event.target.closest('.js-remove')) {
       var record = state.favourites.find(function (f) { return f.id === id; });
       card.classList.add('is-going');
@@ -615,6 +730,13 @@
     if (event.target.closest('.js-note-save')) {
       saveNote(card, id);
     }
+  });
+
+  el.list.addEventListener('change', function (event) {
+    var select = event.target.closest('.js-status');
+    if (!select) return;
+    var card = event.target.closest('.fav');
+    store.update(card.dataset.id, { status: select.value });
   });
 
   el.list.addEventListener('keydown', function (event) {
@@ -704,6 +826,46 @@
     link.download = 'kingkit-favourites-' + new Date().toISOString().slice(0, 10) + '.json';
     link.click();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+
+  /**
+   * One markdown bullet for the shareable list: title, first available price,
+   * release year and URL, joined with em dashes; parts that are unknown are
+   * simply left out, and a Scalemates link rides along when we have one.
+   */
+  function copyLine(fav) {
+    // Titles come from scraped page data: collapse whitespace so an embedded
+    // newline cannot forge extra bullets in the copied markdown.
+    var flat = function (s) { return String(s || '').replace(/\s+/g, ' ').trim(); };
+    var parts = [flat(fav.title) || fav.url];
+    var price = (fav.prices || []).find(function (p) { return p && p.current; });
+    if (price) parts.push(flat((price.label ? price.label + ' ' : '') + price.current));
+    var year = releaseYear(fav);
+    if (year !== null) parts.push(String(year));
+    if (fav.url) parts.push(fav.url);
+    var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : null;
+    // Parentheses and whitespace in a URL would break out of the markdown
+    // link; percent-encode them (a valid URL survives this unchanged).
+    var smUrl = sm && sm.url ? String(sm.url)
+      .replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\s/g, '%20') : '';
+    return '- ' + parts.join(' — ') + (smUrl ? ' ([Scalemates](' + smUrl + '))' : '');
+  }
+
+  el.copyBtn.addEventListener('click', function () {
+    var visible = state.visible;
+    if (!visible.length) return;
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      toast('The clipboard is not available here');
+      return;
+    }
+    var lines = ['# KingKit favourites'];
+    visible.forEach(function (fav) { lines.push(copyLine(fav)); });
+    navigator.clipboard.writeText(lines.join('\n')).then(function () {
+      toast('Copied ' + visible.length + (visible.length === 1 ? ' kit' : ' kits'));
+    }).catch(function (err) {
+      console.error('[KingKit Favourites] copy failed:', err);
+      toast('Could not copy to the clipboard');
+    });
   });
 
   el.importBtn.addEventListener('click', function () { el.importFile.click(); });
@@ -801,6 +963,11 @@
     store.setSettings({ scalemates: smEnabled.checked });
   });
 
+  var watchEnabled = document.getElementById('watch-enabled');
+  watchEnabled.addEventListener('change', function () {
+    store.setSettings({ watch: watchEnabled.checked });
+  });
+
   store.onChange(load);
 
   /* ----------------------------------------------------------------- boot */
@@ -813,6 +980,7 @@
     el.sort.value = state.sort;
     el.area.value = settings.area;
     smEnabled.checked = settings.scalemates !== false;
+    watchEnabled.checked = settings.watch !== false;
     await load();
     el.search.focus();
   })();

@@ -236,17 +236,34 @@
   };
 
   const favR = { title: 'RODEN 1/48 434 JUNKERS D.I (SHORT FUSELAGE)', brand: 'Roden', scale: '1/48' };
-  const f1 = stub([FX.SEARCH_RODEN_434]);
+  const f1 = stub([FX.SEARCH_RODEN_434, FX.KIT_PAGE_RODEN_434]);
   const sm1 = await KKSM.lookup(favR, f1, null);
   t('sm: lookup matches on the first query', sm1.status === 'matched' && sm1.year === '2007' && sm1.url.includes('122091'),
     JSON.stringify(sm1));
-  t('sm: one request sufficed', f1.log.length === 1, String(f1.log.length));
+  t('sm: match costs one search + one kit page', f1.log.length === 2 && f1.log[1].includes('/kits/roden-434'),
+    JSON.stringify(f1.log));
   t('sm: search url shape', f1.log[0] === 'https://www.scalemates.com/search.php?fkSECTION%5B%5D=Kits&q=Roden%20434', f1.log[0]);
   t('sm: era and topic stored for search', sm1.era === 'World War I' && sm1.topicPath === 'Aircraft Propeller');
+  t('sm: kit-page operators merged into the match',
+    sm1.operators === 'Deutsche Luftstreitkräfte; Imperial German Air Force', sm1.operators);
+  t('sm: kit-page campaigns merged, deduplicated',
+    sm1.campaigns === 'World War 1; World War 1 - Western Front', sm1.campaigns);
+  t('sm: ean picked up from the kit page', sm1.ean === '4823017700963', sm1.ean);
 
-  const f2 = stub([FX.SEARCH_EMPTY, FX.SEARCH_RODEN_434]);
+  // Kit-page fetch failing must never cost the match itself.
+  const f1b = stub([FX.SEARCH_RODEN_434, 403]);
+  const sm1b = await KKSM.lookup(favR, f1b, null);
+  t('sm: kit-page failure keeps the match, just without extras',
+    sm1b.status === 'matched' && sm1b.year === '2007' && !sm1b.operators, JSON.stringify({s: sm1b.status, o: sm1b.operators}));
+
+  const f2 = stub([FX.SEARCH_EMPTY, FX.SEARCH_RODEN_434, FX.KIT_PAGE_RODEN_434]);
   const sm2 = await KKSM.lookup(favR, f2, null);
-  t('sm: ladder falls through to the subject query', sm2.status === 'matched' && f2.log.length === 2);
+  t('sm: ladder falls through to the subject query', sm2.status === 'matched' && f2.log.length === 3, String(f2.log.length));
+
+  // 22b. markings extraction directly
+  const extras = KKSM.parseKitPageExtras(FX.KIT_PAGE_RODEN_434);
+  t('sm: operator years stripped from english name', extras.operators.indexOf('1916') === -1, extras.operators);
+  t('sm: markings parsing stays inside its section', extras.operators.indexOf('Should Not Appear') === -1);
 
   const f3 = stub([FX.SEARCH_EMPTY, FX.SEARCH_EMPTY]);
   const sm3 = await KKSM.lookup({ title: 'TAKOM 1/16 01013 YAMATO ANCHORS', brand: 'Takom' }, f3, null);
@@ -268,6 +285,8 @@
     kit.year === '2007' && kit.brand === 'Roden' && kit.number === '434' && kit.scale === '1:48' && kit.ean === '4823017700963',
     JSON.stringify(kit));
   t('sm: kit page url stripped of query', kit.url === 'https://www.scalemates.com/kits/roden-434-junkers-di--122091');
+  t('sm: kit page carries markings vocabulary for manual links too',
+    kit.operators.indexOf('Imperial German Air Force') !== -1 && kit.campaigns.indexOf('Western Front') !== -1);
 
   /* ================= semantic layer (KKSem) ================= */
 
@@ -352,10 +371,148 @@
   const simsPlane = await KKSem.search('biplane');
   t('sem: "biplane" lands on the junkers', simsPlane.get('/p/junkers') > 0.5 && simsPlane.get('/p/junkers') > simsPlane.get('/p/truck'));
 
-  // 27. graceful degradation without a model
+  // 27. two-vector regime: substantive descriptors split into subject +
+  // descriptor vectors; thin descriptors stay as one full-text vector.
+  const richFav = {
+    id: '/p/rich', title: 'RODEN 1/48 434 JUNKERS D.I', brand: 'Roden',
+    sm: { status: 'matched', subject: 'Junkers D.I', era: 'World War I',
+          topicPath: 'Aircraft Propeller', topicNation: 'DR',
+          operators: 'Deutsche Luftstreitkräfte; Imperial German Air Force',
+          campaigns: 'World War 1 - Western Front' }
+  };
+  const rTexts = KKSem.textsFor(richFav, { category: 'Aircraft Model Kits' });
+  t('sem: subject/desc split correctly', rTexts.subject === 'junkers d.i' &&
+    rTexts.desc.indexOf('german world war i propeller aircraft') === 0, JSON.stringify(rTexts));
+  t('sem: operators and campaigns feed the descriptor text',
+    rTexts.desc.indexOf('deutsche luftstreitkräfte') !== -1 && rTexts.desc.indexOf('western front') !== -1);
+  t('sem: full text is subject + desc', rTexts.full === rTexts.subject + '. ' + rTexts.desc);
+
+  await KKSem.ensureVectors([richFav], function () { return { category: 'Aircraft Model Kits' }; }, 10);
+  let vecRecs = await KKSem.storedVectors();
+  t('sem: substantive descriptors stored as two vectors', !!(vecRecs.get('/p/rich') && vecRecs.get('/p/rich').subj));
+
+  // Disjoint-axis favourite: subject is truck-ish, note (=desc) is plane-ish,
+  // so each query can only be reached through ONE of the two vectors.
+  const splitFav = { id: '/p/split', title: 'X truck lorry cargo',
+    sm: { status: 'matched', subject: 'truck lorry cargo' },
+    note: 'junkers plane fokker aircraft biplane' };
+  t('sem: split fixture desc long enough for the two-vector path',
+    KKSem.textsFor(splitFav, null).desc.length >= KKSem.MIN_DESC_CHARS);
+  await KKSem.ensureVectors([richFav, splitFav], function (f) {
+    return f.id === '/p/rich' ? { category: 'Aircraft Model Kits' } : null;
+  }, 10);
+  const simsSubj = await KKSem.search('lorry');    // only the subject vector knows trucks
+  const simsDesc = await KKSem.search('biplane');  // only the descriptor vector knows planes
+  t('sem: subject vector reachable', simsSubj.get('/p/split') > 0.7, String(simsSubj.get('/p/split')));
+  t('sem: descriptor vector reachable (max-of-two)', simsDesc.get('/p/split') > 0.7, String(simsDesc.get('/p/split')));
+
+  // Thin-descriptor guard: no facets, no sm -> single full vector, no .s.
+  await KKSem.ensureVectors([{ id: '/p/thin', title: 'ACME 999 THING' }], null, 10);
+  vecRecs = await KKSem.storedVectors();
+  t('sem: thin descriptors stored as a single vector', vecRecs.get('/p/thin') && !vecRecs.get('/p/thin').subj);
+
+  // 28. graceful degradation without a model
   KKSem._setEmbedderForTests(null);
   const noModelInit = KKSem.init; // real init would try dynamic import; stub it
   KKSem._setEmbedderForTests(fakeEmbed); // restore for any later use
+
+  /* ============ review-pass regressions (storage + semantic) ============ */
+
+  // 29. sync-quota fallback must not leave a shadowing duplicate.
+  await KKFav.clear();
+  await KKFav.add({ url: 'https://www.kingkit.co.uk/product/dup-test', title: 'DUP TEST KIT' });
+  t('reg: record lands in sync normally', 'kkf:/product/dup-test' in chrome.storage.sync._bag);
+  chrome.storage.sync._failNext = true;
+  await KKFav.update('/product/dup-test', { note: 'updated during quota failure' });
+  t('reg: fallback removes the stale sync copy',
+    !('kkf:/product/dup-test' in chrome.storage.sync._bag) &&
+    'kkf:/product/dup-test' in chrome.storage.local._bag);
+  t('reg: the fresh local copy is what list() returns',
+    (await KKFav.list()).find(f => f.id === '/product/dup-test').note === 'updated during quota failure');
+  // Recovery: the next successful sync write clears the local shadow too.
+  await KKFav.update('/product/dup-test', { note: 'after recovery' });
+  t('reg: recovery write cleans the local shadow',
+    'kkf:/product/dup-test' in chrome.storage.sync._bag &&
+    !('kkf:/product/dup-test' in chrome.storage.local._bag));
+  t('reg: list() and get() agree after the round trip',
+    (await KKFav.get('/product/dup-test')).note === 'after recovery' &&
+    (await KKFav.list()).find(f => f.id === '/product/dup-test').note === 'after recovery');
+
+  // Tie-break: identical addedAt in both areas -> the local copy wins in
+  // BOTH list() and get() (local is where fallback writes land).
+  const tieAt = Date.now() - 5000;
+  chrome.storage.local._bag['kkf:/product/tie'] = { v: 2, id: '/product/tie', url: 'u', title: 'LOCAL COPY', addedAt: tieAt };
+  chrome.storage.sync._bag['kkf:/product/tie'] = { v: 2, id: '/product/tie', url: 'u', title: 'SYNC COPY', addedAt: tieAt };
+  t('reg: addedAt tie prefers local in list()',
+    (await KKFav.list()).find(f => f.id === '/product/tie').title === 'LOCAL COPY');
+  t('reg: addedAt tie prefers local in get()',
+    (await KKFav.get('/product/tie')).title === 'LOCAL COPY');
+  await KKFav.remove('/product/tie');
+
+  // 30. markAlertsSeen operates on the STORED alerts, not a UI snapshot.
+  await KKFav.add({ url: 'https://www.kingkit.co.uk/product/seen-test', title: 'SEEN TEST',
+    watch: { checkedAt: 1, tries: 0, gone: false,
+             alerts: [{ at: 1, kind: 'price-drop', label: 'New', from: '£9', to: '£5', seen: false }] } });
+  // A watcher write lands AFTER the UI last rendered:
+  const seenFav = await KKFav.get('/product/seen-test');
+  await KKFav.update('/product/seen-test', {
+    watch: Object.assign({}, seenFav.watch, {
+      alerts: [{ at: 2, kind: 'restock', label: 'Pre-owned', from: '', to: '£7', seen: false }]
+        .concat(seenFav.watch.alerts)
+    })
+  });
+  await KKFav.markAlertsSeen('/product/seen-test');
+  const seenAfter = await KKFav.get('/product/seen-test');
+  t('reg: markAlertsSeen covers alerts added after the snapshot',
+    seenAfter.watch.alerts.length === 2 && seenAfter.watch.alerts.every(a => a.seen === true),
+    JSON.stringify(seenAfter.watch.alerts));
+  t('reg: markAlertsSeen on a watchless favourite is a no-op',
+    (await KKFav.markAlertsSeen('/product/dup-test')) === null);
+
+  // 31. toggle hands back the removed record so Undo can restore everything.
+  await KKFav.update('/product/seen-test', { note: 'precious note', status: 'bought' });
+  const togRes = await KKFav.toggle({ url: 'https://www.kingkit.co.uk/product/seen-test', title: 'SEEN TEST' });
+  t('reg: toggle returns the full removed record',
+    togRes.saved === false && togRes.removed && togRes.removed.note === 'precious note' &&
+    togRes.removed.status === 'bought' && togRes.removed.watch.alerts.length === 2,
+    JSON.stringify(togRes.removed && { note: togRes.removed.note, status: togRes.removed.status }));
+
+  // 32. semantic housekeeping regressions.
+  // Old-tag orphans are swept even though storedVectors() filters them out.
+  chrome.storage.local._bag['kkfv:/p/ancient'] = { m: 'minilm-l6-v2-q8', h: 'x', v: 'AAAA' };
+  await KKSem.ensureVectors([{ id: '/p/alive-one', title: 'AIRFIX 1/72 THING' }], null, 10);
+  t('reg: obsolete-tag vector for a dead favourite is pruned',
+    !('kkfv:/p/ancient' in chrome.storage.local._bag));
+
+  // An embedding failure must not prune live favourites' vectors.
+  await KKSem.ensureVectors([{ id: '/p/keeper', title: 'KEEPER KIT' }], null, 10);
+  t('reg: keeper vector exists before the failing pass',
+    'kkfv:/p/keeper' in chrome.storage.local._bag);
+  KKSem._setEmbedderForTests(async text => {
+    if (/boom/.test(text)) throw new Error('boom');
+    return fakeEmbed(text);
+  });
+  await KKSem.ensureVectors(
+    [{ id: '/p/boom', title: 'ACME boom exploder' }, { id: '/p/keeper', title: 'KEEPER KIT' }], null, 10);
+  t('reg: embed failure does not prune other live vectors',
+    'kkfv:/p/keeper' in chrome.storage.local._bag);
+  KKSem._setEmbedderForTests(fakeEmbed);
+
+  // The budget counts embedding calls: a two-vector favourite costs two.
+  await chrome.storage.local.remove(
+    Object.keys(chrome.storage.local._bag).filter(k => k.startsWith('kkfv:')));
+  const budgetFavs = [
+    { id: '/p/b-rich', title: 'X truck', sm: { status: 'matched', subject: 'truck lorry cargo' },
+      note: 'junkers plane fokker aircraft biplane' }, // two-vector: cost 2
+    { id: '/p/b-thin1', title: 'ACME 1 THING' },       // cost 1
+    { id: '/p/b-thin2', title: 'ACME 2 THING' }        // cost 1 — over budget
+  ];
+  const spent = await KKSem.ensureVectors(budgetFavs, null, 3);
+  t('reg: budget counts embed calls, not favourites', spent === 3, String(spent));
+  t('reg: over-budget favourite left for the next pass',
+    ('kkfv:/p/b-rich' in chrome.storage.local._bag) &&
+    ('kkfv:/p/b-thin1' in chrome.storage.local._bag) &&
+    !('kkfv:/p/b-thin2' in chrome.storage.local._bag));
 
   const failures = out.filter(l => l.startsWith('[FAIL]'));
   document.getElementById('results').innerHTML =

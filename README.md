@@ -238,3 +238,11 @@ load from kingkit.co.uk.
 often aren't on Scalemates), or lookups are switched off, or the queue is in its post-throttle pause. To link it
 by hand: pencil icon → paste the Scalemates kit URL → Save. Pasting a different URL replaces a wrong link;
 clearing the field removes it and lets the automatic lookup try again.
+
+## Licence
+
+[MIT](LICENSE) © 2026 Finn Newick.
+
+The `vendor/` directory contains unmodified builds of
+[Transformers.js](https://github.com/huggingface/transformers.js) and the ONNX Runtime WASM backend, which are
+licensed separately under Apache-2.0 and MIT respectively.

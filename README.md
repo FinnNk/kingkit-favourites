@@ -7,6 +7,8 @@ scale, and both the new and pre-owned prices — to a list you can search, annot
 Nothing is sent anywhere. Favourites live in Chrome's own storage and, by default, sync to any Chrome you are
 signed into with the same Google account.
 
+![Hearts overlaid on KingKit product listings, with a saved kit, a hover state and the undo toast](docs/hearts-on-listings.png)
+
 ## Features
 
 **On the KingKit site**
@@ -24,6 +26,8 @@ signed into with the same Google account.
   "3 in stock".
 
 **In the favourites list** (click the toolbar icon)
+
+![The favourites manager in its full-tab view: search, filters, release years, Scalemates links, a note, and the footer controls](docs/manager.png)
 
 - **Grid or list layout**, whichever you prefer — the choice is remembered.
 - **Filter by manufacturer, scale and category.** The dropdowns are built from
@@ -99,6 +103,11 @@ Design notes, all measured against live model output rather than guessed:
   compresses into a narrow band and the top item's gap collapses, even though its rank stays first.
 - If the model cannot load (offline first run), search silently falls back to the rules tier alone.
 
+**Seeing which tier matched what:** open DevTools on the favourites list (right-click the popup → Inspect, or
+use the full-tab view) and enable the *Verbose* console level. Each search logs a breakdown — rules matches
+with their relevancy scores, semantic matches with their cosine similarities and the acceptance parameters,
+plus the nearest rejected candidates so you can see why something did not appear.
+
 ## Syncing across computers
 
 By default favourites are written to `chrome.storage.sync`, so they follow your Google account to any Chrome you
@@ -157,6 +166,7 @@ src/semantic.js       Dense-vector layer: embedding text, vector store, cosine s
 src/background.js     Service worker — badge count and the polite Scalemates lookup queue
 src/manager.html/.css/.js   The favourites list, used as both popup and full-tab page
 vendor/               Transformers.js + ONNX WASM runtime (pinned 3.7.6, unmodified)
+docs/                 README screenshots
 test/harness.html     Offline test harness (see below)
 test/sm-fixtures.js   Scalemates HTML fixtures captured from real responses
 test/make-manager-harness.py  Generates a browser harness for the manager UI

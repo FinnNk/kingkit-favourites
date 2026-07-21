@@ -31,7 +31,8 @@
     syncFallback: false, // set when a sync write was rejected and spilled to local
     view: 'grid',        // manager layout: 'grid' | 'list'
     sort: 'added-desc',
-    scalemates: true     // background Scalemates lookups on/off
+    scalemates: true,    // background Scalemates lookups on/off
+    watch: true          // daily price & stock re-checks on/off
   };
 
   function area(name) {
@@ -170,7 +171,10 @@
         if (!rec || typeof rec !== 'object') return;
         var id = rec.id || key.slice(KEY_PREFIX.length);
         var prev = byId.get(id);
-        if (!prev || (rec.addedAt || 0) >= (prev.addedAt || 0)) {
+        // Strictly newer wins; on an addedAt tie the FIRST-scanned copy
+        // (local) survives, matching get() — local is where quota-fallback
+        // writes land, so ties must not resurrect a stale sync copy.
+        if (!prev || (rec.addedAt || 0) > (prev.addedAt || 0)) {
           byId.set(id, Object.assign({}, rec, { id: id }));
         }
       });
@@ -221,14 +225,21 @@
 
     try {
       await area(settings.area).set({ [key]: record });
+      // Keep exactly one copy: a leftover in the other area (e.g. from an
+      // earlier quota fallback) would tie on addedAt and shadow future edits.
+      await area(settings.area === 'sync' ? 'local' : 'sync').remove(key)
+        .catch(function () {});
       if (settings.area === 'sync' && settings.syncFallback) {
         await setSettings({ syncFallback: false });
       }
     } catch (err) {
       if (settings.area !== 'sync') throw err;
-      // Sync quota exhausted (or sync disabled) — keep the favourite locally.
+      // Sync quota exhausted (or sync disabled) — keep the favourite locally,
+      // and clear any stale sync copy so it cannot shadow the fresh record
+      // (an addedAt tie between the two would otherwise be ambiguous).
       console.warn('[KingKit Favourites] sync write failed, saving locally:', err);
       await chrome.storage.local.set({ [key]: record });
+      await chrome.storage.sync.remove(key).catch(function () {});
       await setSettings({ syncFallback: true });
     }
     return record;
@@ -246,9 +257,12 @@
 
   async function toggle(fav) {
     var id = fav.id || idFromUrl(fav.url);
-    if (await has(id)) {
+    var existing = await get(id);
+    if (existing) {
       await remove(id);
-      return { id: id, saved: false };
+      // Hand back the full record so an Undo can restore notes, status,
+      // Scalemates data and watch history — not just the scrape payload.
+      return { id: id, saved: false, removed: existing };
     }
     await add(fav);
     return { id: id, saved: true };
@@ -259,6 +273,23 @@
     var existing = await get(id);
     if (!existing) return null;
     return add(Object.assign({}, existing, patch, { id: id, addedAt: existing.addedAt }));
+  }
+
+  /**
+   * Mark every alert on a favourite read — against the alerts as stored RIGHT
+   * NOW, not a UI snapshot: the watcher may have appended alerts since the
+   * manager last rendered, and those must not be resurrected unseen->seen
+   * races in either direction.
+   */
+  async function markAlertsSeen(id) {
+    var existing = await get(id);
+    if (!existing || !existing.watch || !Array.isArray(existing.watch.alerts)) return null;
+    var watch = Object.assign({}, existing.watch, {
+      alerts: existing.watch.alerts.map(function (a) {
+        return Object.assign({}, a, { seen: true });
+      })
+    });
+    return update(id, { watch: watch });
   }
 
   async function clear() {
@@ -382,6 +413,7 @@
     update: update,
     remove: remove,
     toggle: toggle,
+    markAlertsSeen: markAlertsSeen,
     clear: clear,
     count: count,
     exportAll: exportAll,

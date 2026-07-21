@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head><meta charset="utf-8"><title>embedding model bench</title></head>
+<body>
+<pre id="out">booting…</pre>
+<script type="module">
+const OUT = document.getElementById('out');
+const log = s => { OUT.textContent += '\n' + s; };
+
+// Five favourites as three text components each: full (current single-vector),
+// subject-only, descriptors-only. "rich" = descriptors + kit-page vocabulary
+// (operators, campaigns) as feature #6 will produce. Only derivable facts used.
+const KITS = {
+  junkers: {
+    subject: 'junkers d.i (junkers j 9), short-fuselage version',
+    desc: 'german world war i propeller aircraft',
+    rich: 'german world war i propeller aircraft. deutsche luftstreitkrafte (imperial german air force). world war 1 western front'
+  },
+  spitfire: {
+    subject: 'supermarine spitfire mk.ixc',
+    desc: 'british world war ii propeller aircraft',
+    rich: 'british world war ii propeller aircraft. royal air force. world war 2'
+  },
+  tempest: {
+    subject: 'hawker tempest mk.v',
+    desc: 'british world war ii propeller aircraft',
+    rich: 'british world war ii propeller aircraft. royal air force. world war 2'
+  },
+  yamato: {
+    subject: 'japanese navy battleship yamato anchors',
+    desc: 'ships. anchors for the yamato build',
+    rich: 'ships. anchors for the yamato build'
+  },
+  truck: {
+    subject: 'm35a2 2.5 ton cargo truck',
+    desc: 'military',
+    rich: 'military'
+  }
+};
+
+// query -> the kit(s) that SHOULD be accepted, [] = nothing should pass.
+// (warship/submarine/lorry/biplane are rules-tier queries; still useful signal.)
+const PROBES = {
+  'battle of britain': ['spitfire', 'tempest'],
+  'german ww1': ['junkers'],
+  'imperial japanese navy': ['yamato'],
+  'imperial german air force': ['junkers'],
+  'ww2 british fighter': ['spitfire', 'tempest'],
+  'warship': ['yamato'],
+  'submarine': [],
+  'anime figure': [],
+  'lorry': ['truck'],
+  'monoplane': ['spitfire', 'tempest'],
+  'biplane': ['junkers']
+};
+
+const MODELS = [
+  { id: 'Xenova/all-MiniLM-L6-v2', tag: 'minilm', prefix: '' },
+  { id: 'Xenova/bge-small-en-v1.5', tag: 'bge', prefix: 'Represent this sentence for searching relevant passages: ' },
+  { id: 'Xenova/gte-small', tag: 'gte', prefix: '' }
+];
+
+const cos = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * b[i]; return d; };
+const FLOOR = 0.28, GAP = 0.08;
+
+function verdicts(sims) { // sims: {kit: sim}
+  const vals = Object.values(sims);
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return Object.entries(sims).filter(([k, s]) => s >= FLOOR && s - mean >= GAP).map(([k]) => k);
+}
+
+function scoreConfig(table) { // table: {probe: {kit: sim}}
+  let ok = 0, total = 0, detail = [];
+  for (const [q, expected] of Object.entries(PROBES)) {
+    total++;
+    const got = verdicts(table[q]).sort();
+    const want = expected.slice().sort();
+    // Correct = no false positives and at least one true positive when any expected
+    const falsePos = got.filter(k => !want.includes(k));
+    const hit = want.length === 0 ? got.length === 0 : (got.some(k => want.includes(k)) && falsePos.length === 0);
+    if (hit) ok++; else detail.push(q + ': want [' + want + '] got [' + got + ']');
+  }
+  return { ok, total, detail };
+}
+
+(async () => {
+  const { pipeline, env } = await import('../vendor/transformers.min.js');
+  env.allowLocalModels = false;
+  env.backends.onnx.wasm.wasmPaths = new URL('../vendor/', location.href).href;
+  env.backends.onnx.wasm.numThreads = 1;
+  env.backends.onnx.wasm.proxy = false;
+
+  const results = {};
+  for (const model of MODELS) {
+    log('== loading ' + model.id + ' …');
+    const t0 = performance.now();
+    let ex;
+    try {
+      ex = await pipeline('feature-extraction', model.id, { dtype: 'q8', device: 'wasm' });
+    } catch (e) { log('LOAD FAILED: ' + e); continue; }
+    log('   loaded in ' + Math.round(performance.now() - t0) + 'ms');
+    const embed = async t => {
+      const r = await ex(t, { pooling: 'mean', normalize: true });
+      return new Float32Array(r.data);
+    };
+
+    // Embed all kit component texts
+    const vecs = {};
+    const tE = performance.now();
+    for (const [k, c] of Object.entries(KITS)) {
+      vecs[k] = {
+        fullV3: await embed(c.subject + '. ' + c.desc),
+        fullRich: await embed(c.subject + '. ' + c.rich),
+        subj: await embed(c.subject),
+        descRich: await embed(c.rich)
+      };
+    }
+    const perEmbed = Math.round((performance.now() - tE) / (Object.keys(KITS).length * 4));
+
+    // Probe tables for each configuration
+    const configs = {
+      'single-v3': (v, q) => cos(q, v.fullV3),
+      'single-rich': (v, q) => cos(q, v.fullRich),
+      'two-vec-rich': (v, q) => Math.max(cos(q, v.subj), cos(q, v.descRich)),
+      'two-vec-full+subj': (v, q) => Math.max(cos(q, v.subj), cos(q, v.fullRich))
+    };
+    const tables = {};
+    for (const cfg of Object.keys(configs)) tables[cfg] = {};
+    for (const q of Object.keys(PROBES)) {
+      const qv = await embed(model.prefix + q);
+      for (const [cfg, fn] of Object.entries(configs)) {
+        tables[cfg][q] = Object.fromEntries(Object.entries(vecs).map(([k, v]) => [k, +fn(v, qv).toFixed(3)]));
+      }
+    }
+    results[model.tag] = { perEmbedMs: perEmbed, configs: {} };
+    for (const cfg of Object.keys(configs)) {
+      const s = scoreConfig(tables[cfg]);
+      results[model.tag].configs[cfg] = s;
+      log('   ' + cfg.padEnd(20) + s.ok + '/' + s.total + (s.detail.length ? '   MISSES: ' + s.detail.join(' | ') : ''));
+    }
+    results[model.tag].tables = tables;
+  }
+  window.__bench = results;
+  log('DONE');
+})();
+</script>
+</body>
+</html>

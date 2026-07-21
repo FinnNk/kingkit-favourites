@@ -27,8 +27,9 @@
 
   function decodeEntities(s) {
     return String(s || '')
-      .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
-      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ');
+      .replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, function (m, n) { return String.fromCharCode(Number(n)); });
   }
 
   function norm(s) {
@@ -230,7 +231,63 @@
 
   /* ------------------------------------------------------- kit page parse */
 
-  /** For manually pasted links: everything needed is in the page's meta. */
+  /**
+   * The Markings section carries vocabulary nothing else on the site offers:
+   * operators ("Deutsche Luftstreitkräfte (Imperial German Air Force
+   * 1916-1920)") and campaign phrases ("World War 1 - Western Front"). Both
+   * feed the dense-vector search. Structure:
+   *   <h3>Markings</h3> ... <h6><img title="DR"> Name<span class="nw"> (English name)</span></h6>
+   *   <li ...><span class="nw bgb">1918</span> World War 1 - Western Front <img ...>
+   */
+  function parseKitPageExtras(html) {
+    var s = String(html || '');
+    var start = s.indexOf('<h3>Markings</h3>');
+    var section = start === -1 ? '' : s.slice(start, start + 8000);
+    var end = section.indexOf('<h3>', 10);
+    if (end !== -1) section = section.slice(0, end);
+
+    var operators = [];
+    var om;
+    var ore = /<h6>(?:<img[^>]*>\s*)?([^<]{3,60})(?:<span class="nw">\s*\(([^)<]{3,80})\)<\/span>)?<\/h6>/g;
+    while ((om = ore.exec(section)) !== null) {
+      var native = decodeEntities(om[1]).trim();
+      if (native) operators.push(native);
+      if (om[2]) {
+        // "(Imperial German Air Force 1916-1920)" — the years add nothing.
+        var english = decodeEntities(om[2]).replace(/\s*\d{4}\s*-\s*(?:\d{4}|now)\s*$/, '').trim();
+        if (english && english.toLowerCase() !== native.toLowerCase()) operators.push(english);
+      }
+    }
+
+    var campaigns = [];
+    var cm;
+    // The lookahead terminator matters: the section is a hard 8000-char
+    // slice, and an unterminated capture at the cut edge would harvest
+    // arbitrary truncated text as a "campaign".
+    var cre = /<span class="nw bgb">\d{4}<\/span>\s*([^<]{3,70})(?=<)/g;
+    while ((cm = cre.exec(section)) !== null) {
+      var phrase = decodeEntities(cm[1]).trim().replace(/\s+/g, ' ');
+      if (phrase && campaigns.indexOf(phrase) === -1) campaigns.push(phrase);
+    }
+
+    var dedupe = function (list) {
+      var seen = {};
+      return list.filter(function (x) {
+        var k = x.toLowerCase();
+        if (seen[k]) return false;
+        seen[k] = true;
+        return true;
+      });
+    };
+
+    return {
+      operators: dedupe(operators).slice(0, 6).join('; ').slice(0, 240),
+      campaigns: dedupe(campaigns).slice(0, 6).join('; ').slice(0, 240)
+    };
+  }
+
+  /** For manually pasted links and post-match enrichment: the page's meta
+      plus the Markings vocabulary above. */
   function parseKitPage(html, url) {
     var s = String(html || '');
     var title = decodeEntities((s.match(/<meta property="og:title" content="([^"]*)"/) || [])[1] ||
@@ -238,6 +295,7 @@
     var desc = decodeEntities((s.match(/<meta property="og:description" content="([^"]*)"/) || [])[1] || '');
     // "World War I Junkers D.I, Roden 434 (2007)"
     var tm = title.match(/^(.*?),\s*([^,]*?)\s+(\S+)\s+\((\d{4})\)\s*$/);
+    var extras = parseKitPageExtras(s);
     return {
       url: url.split('#')[0].split('?')[0],
       label: title,
@@ -247,6 +305,8 @@
       year: (tm && tm[4]) || (desc.match(/released in (\d{4})/) || [])[1] || '',
       scale: (desc.match(/scale (1:[\d.]+)/) || [])[1] || '',
       ean: (desc.match(/EAN:\s*([0-9]{8,14})/) || [])[1] || '',
+      operators: extras.operators,
+      campaigns: extras.campaigns,
       era: '',
       variant: '',
       topic: null
@@ -268,6 +328,8 @@
       sm.era = cand.era || '';
       sm.variant = cand.variant || '';
       if (cand.ean) sm.ean = cand.ean;
+      if (cand.operators) sm.operators = cand.operators;
+      if (cand.campaigns) sm.campaigns = cand.campaigns;
       if (cand.topic) {
         sm.topicName = cand.topic.name || '';
         sm.topicAlt = cand.topic.alt || '';
@@ -315,10 +377,34 @@
       var candidates = parseSearchHtml(await res.text());
       var best = chooseMatch(parsed, candidates);
       if (best) {
-        return record('matched', best.cand, {
+        var cand = best.cand;
+        // One follow-up fetch of the kit page itself (allowed by robots.txt,
+        // unlike search) for the Markings vocabulary — operators and
+        // campaigns — plus the EAN. Best-effort: a failure loses only the
+        // extra vocabulary, never the match.
+        var extrasMeta = {};
+        try {
+          if (sleep) await sleep(GAP_MS);
+          var page = await fetchFn(cand.url);
+          if (page.status === 403 || page.status === 429) {
+            // Throttled on the kit page: the match stands, but tell the
+            // queue to back off exactly as a throttled search would.
+            extrasMeta.pauseQueue = true;
+          } else if (page.ok) {
+            var details = parseKitPage(await page.text(), cand.url);
+            cand = Object.assign({}, cand, {
+              ean: details.ean || '',
+              operators: details.operators || '',
+              campaigns: details.campaigns || ''
+            });
+          }
+        } catch (err) {
+          /* keep the match without extras */
+        }
+        return record('matched', cand, Object.assign({
           score: Math.round(best.s.score * 100) / 100,
           query: queries[i]
-        });
+        }, extrasMeta));
       }
     }
     return record('nomatch', null, { queries: queries.length });
@@ -330,6 +416,7 @@
     parseTitle: parseTitle,
     parseSearchHtml: parseSearchHtml,
     parseKitPage: parseKitPage,
+    parseKitPageExtras: parseKitPageExtras,
     scoreCandidate: scoreCandidate,
     chooseMatch: chooseMatch,
     buildQueries: buildQueries,

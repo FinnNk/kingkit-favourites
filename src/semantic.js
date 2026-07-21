@@ -17,10 +17,26 @@
 (function (global) {
   'use strict';
 
+  // all-MiniLM-L6-v2 is kept deliberately: benchmarked against
+  // bge-small-en-v1.5 and gte-small on this corpus (11 probe queries, 5 kits,
+  // 4 text configurations each) it won on every distribution-free metric —
+  // top-1 ranking 8/9 vs 7/9, and roughly twice gte's separation margin
+  // between right and wrong answers. Newer models' MTEB scores did not
+  // transfer to short hobby-kit texts; their similarity distributions are
+  // too compressed for thresholding.
   var MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
-  var MODEL_TAG = 'minilm-l6-v2-q8';   // bump to invalidate every stored vector
+  var MODEL_TAG = 'minilm-l6-v2-q8-2v'; // bump to invalidate every stored vector
   var VEC_PREFIX = 'kkfv:';
   var DIM = 384;
+
+  // A favourite is stored as TWO vectors — its subject sentence and its
+  // descriptor sentence — and search takes the better of the two cosines.
+  // Benchmarked as the best MiniLM configuration (recall of both British
+  // WWII fighters for "battle of britain" instead of one). But a degenerate
+  // descriptor ("military") lets the short subject vector inflate false
+  // positives, so the split only applies when the descriptors are
+  // substantive; otherwise one full-text vector is stored.
+  var MIN_DESC_CHARS = 25;
 
   var pipelinePromise = null;   // resolves to embed(text)->Float32Array, or null
   var testEmbedder = null;
@@ -87,7 +103,17 @@
    * 0.16 against the kitchen-sink version). Exact tokens like numbers are the
    * rules tier's job.
    */
-  function textFor(fav, facets) {
+  /**
+   * The two component texts a favourite is embedded from.
+   * subject: the kit's canonical name ("junkers d.i (junkers j 9), short-fuselage version").
+   * desc: everything descriptive — nation, era, topic path (reversed so
+   * "Aircraft Propeller" reads as "propeller aircraft", which measurably
+   * embeds better), the Markings operators and campaigns harvested from the
+   * kit page, and the user's note. Catalogue numbers, scales, brands and
+   * years stay out: keyword soups measurably halve similarities under mean
+   * pooling, and exact tokens are the rules tier's job.
+   */
+  function textsFor(fav, facets) {
     var f = facets || {};
     var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : {};
 
@@ -103,10 +129,6 @@
     if (sm.topicAlt) subject += ' (' + sm.topicAlt + ')';
     if (sm.variant) subject += ', ' + sm.variant;
 
-    // Descriptors: nation, era, topic path — reversed so the category path
-    // "Aircraft Propeller" reads as natural English ("propeller aircraft"),
-    // which measurably embeds better — or the KingKit category stripped of
-    // its "Model Kits" boilerplate.
     var descriptors = [
       NATIONS[sm.topicNation] || '',
       sm.era || '',
@@ -118,8 +140,19 @@
         .replace(/\s+/g, ' ').trim().toLowerCase();
     }
 
-    return [subject, descriptors, fav.note]
+    var desc = [descriptors, sm.operators, sm.campaigns, fav.note]
       .filter(Boolean).join('. ').toLowerCase();
+
+    return {
+      subject: subject.toLowerCase(),
+      desc: desc,
+      full: [subject.toLowerCase(), desc].filter(Boolean).join('. ')
+    };
+  }
+
+  /** Single-string view of textsFor — used for hashing and by older tests. */
+  function textFor(fav, facets) {
+    return textsFor(fav, facets).full;
   }
 
   /* ------------------------------------------------------------ pipeline */
@@ -170,53 +203,73 @@
       if (key.indexOf(VEC_PREFIX) !== 0) return;
       var rec = bag[key];
       if (!rec || rec.m !== MODEL_TAG || !rec.v) return;
-      map.set(key.slice(VEC_PREFIX.length), { h: rec.h, vec: vecFromB64(rec.v) });
+      map.set(key.slice(VEC_PREFIX.length), {
+        h: rec.h,
+        vec: vecFromB64(rec.v),
+        subj: rec.s ? vecFromB64(rec.s) : null
+      });
     });
     return map;
   }
 
   /**
-   * Ensure every favourite has an up-to-date vector; embeds at most
-   * `budget` items per call so a manager session never grinds. Returns the
-   * number embedded. Also prunes vectors for favourites that no longer exist.
+   * Ensure every favourite has an up-to-date vector; the budget caps the
+   * number of EMBEDDING CALLS per invocation (a two-vector favourite costs
+   * two) so a manager session never grinds. Returns the number of calls
+   * spent. Also prunes vectors for favourites that no longer exist —
+   * including records left under older model tags, which storedVectors()
+   * filters out but which would otherwise linger in storage forever.
    */
   async function ensureVectors(favs, facetsOf, budget) {
     var embed = await init();
     if (!embed) return 0;
 
     var have = await storedVectors();
-    var alive = new Set();
+    // Liveness is a property of the favourites list, not of loop progress:
+    // an embedding failure must never cause live favourites' vectors to be
+    // pruned below.
+    var alive = new Set(favs.map(function (f) { return f.id; }));
     var done = 0;
     var max = budget || 20;
 
     for (var i = 0; i < favs.length; i += 1) {
       var fav = favs[i];
-      alive.add(fav.id);
-      var text = textFor(fav, facetsOf ? facetsOf(fav) : null);
-      var h = hash(text);
+      var texts = textsFor(fav, facetsOf ? facetsOf(fav) : null);
+      var h = hash(texts.subject + ' ' + texts.desc);
       var current = have.get(fav.id);
       if (current && current.h === h) continue;
-      if (done >= max) continue;
+      var cost = texts.desc.length >= MIN_DESC_CHARS ? 2 : 1;
+      if (done + cost > max) continue;
       try {
-        var vec = normalise(await embed(text));
-        await chrome.storage.local.set({
-          [VEC_PREFIX + fav.id]: { m: MODEL_TAG, h: h, v: b64FromVec(vec) }
-        });
-        done += 1;
+        var record;
+        if (cost === 2) {
+          // Substantive descriptors: subject + descriptor vectors, best-of-two.
+          var descVec = normalise(await embed(texts.desc));
+          var subjVec = normalise(await embed(texts.subject));
+          record = { m: MODEL_TAG, h: h, v: b64FromVec(descVec), s: b64FromVec(subjVec) };
+        } else {
+          // Thin descriptors: a lone short subject vector inflates false
+          // positives, so store one full-text vector instead.
+          var fullVec = normalise(await embed(texts.full));
+          record = { m: MODEL_TAG, h: h, v: b64FromVec(fullVec) };
+        }
+        await chrome.storage.local.set({ [VEC_PREFIX + fav.id]: record });
+        done += cost;
       } catch (err) {
         console.warn('[KingKit Favourites] embedding failed for', fav.id, err);
         break;
       }
     }
 
-    // Prune leftovers from removed favourites.
-    var stale = [];
-    have.forEach(function (_, id) {
-      if (!alive.has(id)) stale.push(VEC_PREFIX + id);
-    });
-    if (stale.length) {
-      try { await chrome.storage.local.remove(stale); } catch (err) { /* non-fatal */ }
-    }
+    // Prune vectors for removed favourites — inspect raw keys, not the
+    // tag-filtered map, so obsolete-tag records are swept too.
+    try {
+      var bag = await chrome.storage.local.get(null);
+      var stale = Object.keys(bag).filter(function (key) {
+        return key.indexOf(VEC_PREFIX) === 0 && !alive.has(key.slice(VEC_PREFIX.length));
+      });
+      if (stale.length) await chrome.storage.local.remove(stale);
+    } catch (err) { /* non-fatal */ }
     return done;
   }
 
@@ -233,7 +286,9 @@
     var have = await storedVectors();
     var sims = new Map();
     have.forEach(function (rec, id) {
-      sims.set(id, cosine(q, rec.vec));
+      var sim = cosine(q, rec.vec);
+      if (rec.subj) sim = Math.max(sim, cosine(q, rec.subj));
+      sims.set(id, sim);
     });
     return sims;
   }
@@ -242,6 +297,8 @@
     MODEL_ID: MODEL_ID,
     MODEL_TAG: MODEL_TAG,
     DIM: DIM,
+    MIN_DESC_CHARS: MIN_DESC_CHARS,
+    textsFor: textsFor,
     textFor: textFor,
     hash: hash,
     cosine: cosine,

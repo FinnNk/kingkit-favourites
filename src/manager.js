@@ -28,10 +28,26 @@
     usage: document.getElementById('usage'),
     toast: document.getElementById('toast'),
     toastText: document.getElementById('toast-text'),
-    toastUndo: document.getElementById('toast-undo')
+    toastUndo: document.getElementById('toast-undo'),
+    filters: document.getElementById('filters'),
+    filterClear: document.getElementById('f-clear')
   };
 
-  var state = { favourites: [], query: '', sort: 'added-desc' };
+  // Facet key -> its <select> and the label for "no filter".
+  var FACETS = [
+    { key: 'brand', el: document.getElementById('f-brand'), all: 'All manufacturers' },
+    { key: 'scale', el: document.getElementById('f-scale'), all: 'All scales' },
+    { key: 'category', el: document.getElementById('f-category'), all: 'All categories' }
+  ];
+
+  var state = {
+    favourites: [],
+    facets: new Map(), // id -> {brand, scale, category}, derived, never stored
+    vocab: null,
+    query: '',
+    sort: 'added-desc',
+    filters: { brand: '', scale: '', category: '' }
+  };
 
   /* --------------------------------------------------------------- format */
 
@@ -76,11 +92,84 @@
 
   /* --------------------------------------------------------------- render */
 
+  function facetsOf(fav) {
+    return state.facets.get(fav.id) || {};
+  }
+
   function matches(fav, query) {
     if (!query) return true;
-    var haystack = [fav.title, fav.details, fav.note, fav.url]
+    var f = facetsOf(fav);
+    var haystack = [fav.title, fav.details, fav.note, fav.url, f.brand, f.scale, f.category]
       .filter(Boolean).join(' ').toLowerCase();
     return query.split(/\s+/).every(function (term) { return haystack.indexOf(term) !== -1; });
+  }
+
+  /**
+   * `except` skips one facet's own filter, which is what makes the dropdowns
+   * behave: the scale list is counted against everything the other filters
+   * allow, so picking a manufacturer narrows the scales on offer but does not
+   * empty the manufacturer list itself.
+   */
+  function passesFilters(fav, except) {
+    var f = facetsOf(fav);
+    for (var i = 0; i < FACETS.length; i += 1) {
+      var key = FACETS[i].key;
+      if (key === except) continue;
+      if (state.filters[key] && f[key] !== state.filters[key]) return false;
+    }
+    return true;
+  }
+
+  function anyFilterActive() {
+    return FACETS.some(function (f) { return state.filters[f.key]; });
+  }
+
+  /** 1/24 before 1/48 before 1/72, with unparseable values last. */
+  function byScale(a, b) {
+    var da = parseFloat(String(a).split('/')[1]);
+    var db = parseFloat(String(b).split('/')[1]);
+    if (isNaN(da)) da = Infinity;
+    if (isNaN(db)) db = Infinity;
+    return da - db || String(a).localeCompare(String(b), 'en-GB');
+  }
+
+  /**
+   * Rebuild the facet dropdowns from the favourites themselves, so only values
+   * actually present are offered — with a count beside each.
+   */
+  function renderFilters(searched) {
+    el.filters.hidden = state.favourites.length < 2;
+    if (el.filters.hidden) return;
+
+    FACETS.forEach(function (facet) {
+      var counts = new Map();
+      searched.filter(function (fav) { return passesFilters(fav, facet.key); })
+        .forEach(function (fav) {
+          var value = facetsOf(fav)[facet.key];
+          if (!value) return;
+          counts.set(value, (counts.get(value) || 0) + 1);
+        });
+
+      var values = Array.from(counts.keys())
+        .sort(facet.key === 'scale' ? byScale : function (a, b) { return a.localeCompare(b, 'en-GB'); });
+
+      // Keep the active choice selectable even once nothing matches it.
+      var current = state.filters[facet.key];
+      if (current && !counts.has(current)) values.unshift(current);
+
+      var select = facet.el;
+      select.textContent = '';
+      select.appendChild(new Option(facet.all, ''));
+      values.forEach(function (value) {
+        select.appendChild(new Option(value + ' (' + (counts.get(value) || 0) + ')', value));
+      });
+      select.value = current;
+      select.disabled = !values.length;
+      select.classList.toggle('is-active', Boolean(current));
+    });
+
+    el.filterClear.hidden = !anyFilterActive();
+    el.filters.classList.toggle('has-clear', anyFilterActive());
   }
 
   function sortFavourites(items, mode) {
@@ -104,7 +193,7 @@
     wrap.innerHTML =
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.7 4.7 13.4a4.6 4.6 0 0 1 0-6.5 4.6 4.6 0 0 1 6.5 0l.8.8.8-.8a4.6 4.6 0 0 1 6.5 0 4.6 4.6 0 0 1 0 6.5Z"/></svg>' +
       (filtered
-        ? '<h2>No matches</h2><p>Nothing here matches that search.</p>'
+        ? '<h2>No matches</h2><p>Nothing here matches your search and filters.</p>'
         : '<h2>No favourites yet</h2><p>Browse kingkit.co.uk and click the heart in the corner of any product image.</p>');
     return wrap;
   }
@@ -155,8 +244,10 @@
       img.remove();
     }
 
+    var f = facetsOf(fav);
     var details = node.querySelector('.fav__details');
-    if (fav.details) details.textContent = fav.details; else details.hidden = true;
+    var line = [f.brand, f.scale, f.category].filter(Boolean).join(' · ') || fav.details;
+    if (line) details.textContent = line; else details.hidden = true;
 
     var prices = node.querySelector('.fav__prices');
     var priceHtml = renderPrices(fav);
@@ -179,27 +270,37 @@
 
   function render() {
     var query = state.query.trim().toLowerCase();
+    var searched = state.favourites.filter(function (f) { return matches(f, query); });
+    renderFilters(searched);
+
     var visible = sortFavourites(
-      state.favourites.filter(function (f) { return matches(f, query); }),
+      searched.filter(function (f) { return passesFilters(f, null); }),
       state.sort
     );
 
     el.list.textContent = '';
     if (!visible.length) {
-      el.list.appendChild(emptyState(Boolean(query) && state.favourites.length > 0));
+      el.list.appendChild(emptyState((Boolean(query) || anyFilterActive()) && state.favourites.length > 0));
     } else {
       var frag = document.createDocumentFragment();
       visible.forEach(function (fav) { frag.appendChild(buildCard(fav)); });
       el.list.appendChild(frag);
     }
 
-    el.count.textContent = String(state.favourites.length);
+    el.count.textContent = visible.length === state.favourites.length
+      ? String(state.favourites.length)
+      : visible.length + '/' + state.favourites.length;
     el.exportBtn.disabled = !state.favourites.length;
     el.clearBtn.disabled = !state.favourites.length;
   }
 
   async function load() {
+    state.vocab = await store.getVocab();
     state.favourites = await store.list();
+    state.facets = new Map();
+    state.favourites.forEach(function (fav) {
+      state.facets.set(fav.id, store.facetsFor(fav, state.vocab));
+    });
     render();
     updateUsage();
   }
@@ -293,6 +394,18 @@
       state.query = el.search.value;
       render();
     }, 120);
+  });
+
+  FACETS.forEach(function (facet) {
+    facet.el.addEventListener('change', function () {
+      state.filters[facet.key] = facet.el.value;
+      render();
+    });
+  });
+
+  el.filterClear.addEventListener('click', function () {
+    FACETS.forEach(function (facet) { state.filters[facet.key] = ''; });
+    render();
   });
 
   el.sort.addEventListener('change', function () {

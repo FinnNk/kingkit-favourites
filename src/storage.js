@@ -20,7 +20,11 @@
 
   var KEY_PREFIX = 'kkf:';
   var SETTINGS_KEY = 'kkf.settings';
-  var SCHEMA = 1;
+  var VOCAB_KEY = 'kkf.vocab';
+  var SCHEMA = 2;
+
+  // The manufacturer and category lists change rarely; re-harvest fortnightly.
+  var VOCAB_TTL = 14 * 24 * 60 * 60 * 1000;
 
   var DEFAULT_SETTINGS = {
     area: 'sync',        // preferred write target: 'sync' | 'local'
@@ -67,6 +71,90 @@
     var next = Object.assign({}, await getSettings(), patch);
     await chrome.storage.local.set({ [SETTINGS_KEY]: next });
     return next;
+  }
+
+  /* ------------------------------------------------------- site vocabulary */
+
+  /**
+   * KingKit's own manufacturer and category lists, harvested from the Kit
+   * Finder form by the content script. Kept in local storage (never sync — the
+   * manufacturer list alone is ~40 KB) and used to work out which brand a kit
+   * belongs to from its title.
+   */
+  async function getVocab() {
+    try {
+      return (await chrome.storage.local.get(VOCAB_KEY))[VOCAB_KEY] || null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  async function setVocab(vocab) {
+    await chrome.storage.local.set({
+      [VOCAB_KEY]: {
+        brands: vocab.brands || [],
+        categories: vocab.categories || [],
+        fetchedAt: Date.now()
+      }
+    });
+  }
+
+  function vocabIsStale(vocab) {
+    if (!vocab || !vocab.brands || !vocab.brands.length) return true;
+    return (Date.now() - (vocab.fetchedAt || 0)) > VOCAB_TTL;
+  }
+
+  /* ------------------------------------------------------------- facets */
+
+  /** "1/48 Scale", "SPECIAL HOBBY 1/48 SH48206 ..." -> "1/48" */
+  function parseScale(value) {
+    var match = String(value == null ? '' : value).match(/\b1\s*[\/:]\s*(\d+(?:\.\d+)?)\b/);
+    return match ? '1/' + match[1] : '';
+  }
+
+  /**
+   * Titles begin with the manufacturer, so the brand is the longest entry in
+   * the site's own list that prefixes the title — longest wins so that
+   * "Special Hobby" is not truncated to "Special".
+   */
+  function matchBrand(title, brands) {
+    if (!title || !brands || !brands.length) return '';
+    var lower = title.toLowerCase();
+    var best = '';
+    for (var i = 0; i < brands.length; i += 1) {
+      var brand = brands[i];
+      if (brand.length > best.length && lower.indexOf(brand.toLowerCase() + ' ') === 0) {
+        best = brand;
+      }
+    }
+    return best;
+  }
+
+  function firstWord(title) {
+    var match = String(title == null ? '' : title).trim().match(/^[A-Za-z][A-Za-z'&.-]+/);
+    if (!match) return '';
+    var word = match[0];
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  }
+
+  /**
+   * Work out {brand, scale, category} for a favourite. Values captured at save
+   * time win; anything missing is derived from the title, so records saved
+   * before this feature existed are still filterable.
+   */
+  function facetsFor(fav, vocab) {
+    var categories = (vocab && vocab.categories) || [];
+    var category = fav.category || '';
+    // v1 records reused `details` for the scale (tiles) or category (product
+    // pages), so only treat it as a category when the site recognises it.
+    if (!category && fav.details && categories.indexOf(fav.details) !== -1) {
+      category = fav.details;
+    }
+    return {
+      brand: fav.brand || matchBrand(fav.title, (vocab && vocab.brands) || []) || firstWord(fav.title),
+      scale: fav.scale || parseScale(fav.details) || parseScale(fav.title),
+      category: category
+    };
   }
 
   /** Every favourite, newest first, merged across both storage areas. */
@@ -301,6 +389,12 @@
     usage: usage,
     getSettings: getSettings,
     setSettings: setSettings,
+    getVocab: getVocab,
+    setVocab: setVocab,
+    vocabIsStale: vocabIsStale,
+    facetsFor: facetsFor,
+    parseScale: parseScale,
+    matchBrand: matchBrand,
     onChange: onChange
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

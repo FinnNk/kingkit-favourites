@@ -52,12 +52,18 @@
     var img = tile.querySelector('.product-media img') || tile.querySelector('img');
     var url = absolute(link.getAttribute('href'));
 
+    var title = text(tile.querySelector('.product-title')) || (img && img.getAttribute('alt')) || text(link);
+    var details = text(tile.querySelector('.product-details'));
+
     return {
       id: store.idFromUrl(url),
       url: url,
-      title: text(tile.querySelector('.product-title')) || (img && img.getAttribute('alt')) || text(link),
+      title: title,
       image: img ? absolute(img.getAttribute('src')) : '',
-      details: text(tile.querySelector('.product-details')),
+      details: details,
+      scale: store.parseScale(details) || store.parseScale(title),
+      // Listing tiles carry no category; enrich() fills it in after saving.
+      category: '',
       prices: pricesFromTile(tile)
     };
   }
@@ -106,16 +112,80 @@
     var items = breadcrumb ? breadcrumb.querySelectorAll('li') : [];
     if (breadcrumb && !items.length) items = breadcrumb.querySelectorAll('a');
     var crumbs = Array.prototype.map.call(items, text).filter(Boolean);
+    var category = crumbs.length > 2 ? crumbs[1] : '';
+    var title = text(page.querySelector('h1')) || document.title;
 
     return {
       id: store.idFromUrl(location.href),
       url: absolute(location.pathname + location.search),
-      title: text(page.querySelector('h1')) || document.title,
+      title: title,
       image: img ? absolute(img.getAttribute('src')) : '',
-      details: crumbs.length > 2 ? crumbs[1] : '',
+      details: category,
+      scale: store.parseScale(title),
+      category: category,
       productId: (page.querySelector('input[name="product_id"]') || {}).value || '',
       prices: prices.filter(function (p) { return p.current || p.note; })
     };
+  }
+
+  /* ----------------------------------------------------- site vocabulary */
+
+  function optionTexts(root) {
+    if (!root) return [];
+    return Array.prototype.map.call(root.querySelectorAll('option'), text)
+      .filter(function (value) { return value && !/^All /i.test(value); });
+  }
+
+  /**
+   * Cache KingKit's manufacturer and category lists so the manager can group
+   * favourites by brand. Categories are server-rendered in the Kit Finder
+   * form; the manufacturer list is only inlined on shop.php, so elsewhere we
+   * ask the same endpoint the site's own script uses.
+   */
+  async function harvestVocab() {
+    if (!store.vocabIsStale(await store.getVocab())) return;
+
+    var categories = optionTexts(document.querySelector('select[name="searchCategory"]'));
+    var brands = optionTexts(document.querySelector('select[name="searchBrands"]'));
+
+    if (brands.length < 50) {
+      try {
+        var res = await fetch('/ajax/get-brands.php', { credentials: 'same-origin' });
+        var doc = new DOMParser().parseFromString('<select>' + (await res.text()) + '</select>', 'text/html');
+        brands = optionTexts(doc);
+      } catch (err) {
+        // Offline or the endpoint moved — brands fall back to the title's
+        // first word, so this is not worth surfacing.
+      }
+    }
+
+    if (brands.length && categories.length) {
+      await store.setVocab({ brands: brands, categories: categories });
+    }
+  }
+
+  /**
+   * Fill in what a listing tile cannot show. Runs after the favourite is
+   * already saved, so a slow or failed request never delays the click.
+   */
+  async function enrich(fav) {
+    if (fav.category) return;
+    try {
+      var res = await fetch(fav.url, { credentials: 'same-origin' });
+      var doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      var breadcrumb = doc.querySelector('.breadcrumb');
+      var items = breadcrumb ? breadcrumb.querySelectorAll('li') : [];
+      var crumbs = Array.prototype.map.call(items, text).filter(Boolean);
+      var patch = {
+        category: crumbs.length > 2 ? crumbs[1] : '',
+        productId: (doc.querySelector('input[name="product_id"]') || {}).value || ''
+      };
+      if (!patch.category && !patch.productId) return;
+      // Skip if it was un-favourited while the request was in flight.
+      if (await store.has(fav.id)) await store.update(fav.id, patch);
+    } catch (err) {
+      /* the favourite is saved either way; it just has no category */
+    }
   }
 
   /* ------------------------------------------------------------------- view */
@@ -223,6 +293,15 @@
 
   /* --------------------------------------------------------------- wiring */
 
+  /** Resolve the manufacturer from the cached vocabulary at save time. */
+  async function withBrand(fav) {
+    if (!fav.brand) {
+      var vocab = await store.getVocab();
+      fav.brand = store.matchBrand(fav.title, (vocab && vocab.brands) || []);
+    }
+    return fav;
+  }
+
   document.addEventListener('click', function (event) {
     var btn = event.target && event.target.closest ? event.target.closest('.' + BTN) : null;
     if (!btn) return;
@@ -239,12 +318,13 @@
     }
 
     btn.classList.add('is-busy');
-    store.toggle(fav).then(function (result) {
+    withBrand(fav).then(store.toggle).then(function (result) {
       btn.classList.remove('is-busy');
       if (result.saved) {
         btn.classList.add('kkf-pop');
         setTimeout(function () { btn.classList.remove('kkf-pop'); }, 320);
         toast('Saved to favourites', function () { store.remove(result.id); });
+        enrich(fav);
       } else {
         toast('Removed from favourites', function () { store.add(fav); });
       }
@@ -270,4 +350,5 @@
   }).observe(document.documentElement, { childList: true, subtree: true });
 
   injectAll();
+  harvestVocab();
 })();

@@ -115,6 +115,25 @@
   <ol class="breadcrumb"><li><a href="/">Home</a></li><li><a href="/c/ships">Model Ships Kits</a></li><li>TAKOM 01013</li></ol>
 </div>
 
+<!-- Kit Finder sidebar, as rendered on every page except the basket. The
+     manufacturer list is only inlined on shop.php, so this stands in for the
+     common case where the content script must fall back to the endpoint. -->
+<form action="/shop.php" method="post" style="margin-top:40px">
+  <div class="leftbox">
+    <h2 class="section-title nobgrd">Kit Finder</h2>
+    <select name="searchBrands"><option value="">All Manufacturers</option></select>
+    <select name="searchCategory">
+      <option value="">All Categories</option>
+      <option value="26">Aircraft Model Kits</option>
+      <option value="17">Model Ships Kits</option>
+      <option value="11">Military Model Kits</option>
+      <option value="13">Miscellaneous</option>
+      <option value="22">Sale items</option>
+    </select>
+    <select name="searchScale"><option value="">All Scales</option><option value="1/48">1/48</option></select>
+  </div>
+</form>
+
 <div id="results">running…</div>
 
 <script src="mock-chrome.js"></script>

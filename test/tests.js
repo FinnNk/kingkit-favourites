@@ -47,7 +47,7 @@
 
   let saved = await KKFav.list();
   t('one record stored', saved.length === 1, String(saved.length));
-  t('record has schema version + timestamp', saved[0].v === 1 && saved[0].addedAt > 0);
+  t('record has schema version + timestamp', saved[0].v === 2 && saved[0].addedAt > 0);
   t('stored in sync by default', Object.keys(chrome.storage.sync._bag).length === 1);
 
   // 4. toggle off
@@ -111,6 +111,63 @@
   // 11. id normalisation
   t('trailing slash + case normalise to one id',
     KKFav.idFromUrl('https://www.kingkit.co.uk/product/ABC/') === KKFav.idFromUrl('https://www.kingkit.co.uk/product/abc'));
+
+  // 12. site vocabulary harvesting
+  for (let i = 0; i < 30 && KKFav.vocabIsStale(await KKFav.getVocab()); i++) await wait(100);
+  const vocab = await KKFav.getVocab();
+  t('vocabulary harvested', !!vocab && vocab.brands.length > 0);
+  t('brands came from the ajax endpoint (not inlined on this page)',
+    window.__fetchLog.some(u => u.includes('/ajax/get-brands.php')));
+  t('"All …" placeholder options excluded',
+    !vocab.brands.some(b => /^All /.test(b)) && !vocab.categories.some(c => /^All /.test(c)));
+  t('categories read from the Kit Finder form',
+    vocab.categories.includes('Aircraft Model Kits') && vocab.categories.length === 5, String(vocab.categories.length));
+  t('vocabulary is stored locally, never synced',
+    'kkf.vocab' in chrome.storage.local._bag && !('kkf.vocab' in chrome.storage.sync._bag));
+
+  // 13. facet capture at save time
+  await KKFav.clear();
+  tileBtns[0].click();
+  await wait(250);
+  const rec = (await KKFav.list())[0];
+  t('scale captured from the tile', rec.scale === '1/16', rec.scale);
+  t('brand resolved from the vocabulary', rec.brand === 'Takom', rec.brand);
+
+  // enrichment backfills what a listing tile cannot show
+  for (let i = 0; i < 30 && !(await KKFav.get(rec.id)).category; i++) await wait(100);
+  const enriched = await KKFav.get(rec.id);
+  t('category backfilled from the product page', enriched.category === 'Aircraft Model Kits', enriched.category);
+  t('product id backfilled too', enriched.productId === '55501', enriched.productId);
+  t('enrichment preserves addedAt', enriched.addedAt === rec.addedAt);
+
+  // 14. longest-prefix brand matching
+  t('longest brand name wins over a shorter prefix',
+    KKFav.matchBrand('SPECIAL HOBBY 1/48 SH48206 FIAT G.50', vocab.brands) === 'Special Hobby',
+    KKFav.matchBrand('SPECIAL HOBBY 1/48 SH48206 FIAT G.50', vocab.brands));
+  t('unknown manufacturer yields no match',
+    KKFav.matchBrand('WOBBLEFIX 1/48 999 SOMETHING', vocab.brands) === '');
+
+  // 15. scale parsing
+  t('scale parsed from "1/16 Scale"', KKFav.parseScale('1/16 Scale') === '1/16');
+  t('scale parsed from a title', KKFav.parseScale('ACADEMY 1/800 14213 USS NIMITZ') === '1/800');
+  t('no scale in a scaleless title', KKFav.parseScale('ACADEMY 18129 DA VINCI CART') === '');
+
+  // 16. facets derived for records saved before this feature existed
+  const legacyTile = { title: 'AIRFIX 1/72 08022 JUNKERS JU52', details: '1/72 Scale' };
+  const dTile = KKFav.facetsFor(legacyTile, vocab);
+  t('legacy tile record yields brand + scale', dTile.brand === 'Airfix' && dTile.scale === '1/72', JSON.stringify(dTile));
+  t('legacy tile record has no category', dTile.category === '');
+
+  const legacyProduct = { title: 'TAKOM 1/16 01013 YAMATO ANCHORS', details: 'Model Ships Kits' };
+  const dProduct = KKFav.facetsFor(legacyProduct, vocab);
+  t('legacy product record recovers its category', dProduct.category === 'Model Ships Kits', dProduct.category);
+  t('legacy product record still finds brand + scale',
+    dProduct.brand === 'Takom' && dProduct.scale === '1/16', JSON.stringify(dProduct));
+
+  t('a scale-like details value is not mistaken for a category',
+    KKFav.facetsFor({ title: 'AIRFIX 1/72 X', details: '1/72 Scale' }, vocab).category === '');
+  t('facets fall back to the title with no vocabulary',
+    KKFav.facetsFor({ title: 'AIRFIX 1/72 08022 JUNKERS' }, null).brand === 'Airfix');
 
   const failures = out.filter(l => l.startsWith('[FAIL]'));
   document.getElementById('results').innerHTML =

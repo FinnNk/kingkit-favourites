@@ -45,4 +45,29 @@
   };
   window.chrome.runtime = { getURL: p => './' + p.replace(/^src\//, ''), lastError: null };
   window.chrome.tabs = { create: o => { window.__lastTabCreate = o; } };
+
+  // Stub the two same-origin requests the content script makes: the brand list
+  // endpoint, and the product page it reads a category off after a save.
+  window.__fetchLog = [];
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = String(input);
+    window.__fetchLog.push(url);
+    if (url.includes('/ajax/get-brands.php')) {
+      return Promise.resolve(new Response(
+        "<option value=''>All Manufacturers</option>" +
+        ['Academy', 'Airfix', 'Eduard', 'Skybow', 'Special', 'Special Hobby', 'Takom']
+          .map((b, i) => `<option value='${i}'>${b}</option>`).join(''),
+        { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    }
+    if (url.includes('/product/')) {
+      return Promise.resolve(new Response(
+        '<html><body><div class="product-page">' +
+        '<input type="hidden" name="product_id" value="55501">' +
+        '</div><ol class="breadcrumb"><li><a>Home</a></li><li><a>Aircraft Model Kits</a></li>' +
+        '<li>Sale items</li><li>A KIT</li></ol></body></html>',
+        { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    }
+    return realFetch(input, init);
+  };
 })();

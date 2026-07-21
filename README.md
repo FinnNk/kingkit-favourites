@@ -19,13 +19,20 @@ signed into with the same Google account.
   button instead of the small circular one).
 - **One click, no navigation.** Clicking the heart never opens the product or triggers the tile link.
 - **Undo.** Every save or removal shows a brief toast with an *Undo* button.
-- **Captures the details worth keeping**: title, thumbnail, scale, category, product ID, and each price row
-  including sale prices, the crossed-out original, and stock notes such as "Out of stock" or "3 in stock".
+- **Captures the details worth keeping**: title, thumbnail, manufacturer, scale, category, product ID, and each
+  price row including sale prices, the crossed-out original, and stock notes such as "Out of stock" or
+  "3 in stock".
 
 **In the favourites list** (click the toolbar icon)
 
 - **Grid or list layout**, whichever you prefer — the choice is remembered.
-- **Search** across titles, scales and your own notes.
+- **Filter by manufacturer, scale and category.** The dropdowns are built from
+  your own saved kits, not from KingKit's full lists — with 20 favourites you
+  pick from the handful of manufacturers you have actually saved, not 1130 of
+  them. Each option shows how many kits it holds, and choosing one narrows the
+  others: pick *Special Hobby* and the scale list collapses to just the scales
+  they appear in.
+- **Search** across titles, manufacturers, scales, categories and your own notes.
 - **Sort** by newest, oldest, title, or price (low–high / high–low).
 - **Notes** — add a private reminder to any kit ("wanted for the winter build", "check postage").
 - **Remove** individual items, or clear the whole list — both undoable.
@@ -104,6 +111,22 @@ delegated listener so that carousel-cloned tiles keep working, and a `MutationOb
 load. A favourite's identity is the normalised product URL path, so the same kit saved from a listing and from
 its own page is one entry.
 
+Working out the three filter facets takes a little more effort, because a listing tile shows only the scale:
+
+- **Scale** comes straight off the tile's `.product-details` ("1/48 Scale"), or the title.
+- **Manufacturer** is the longest entry in KingKit's own manufacturer list that prefixes the title — longest
+  wins, so "SPECIAL HOBBY 1/48 …" resolves to *Special Hobby* rather than *Special*. That list is cached from
+  the Kit Finder form (or `/ajax/get-brands.php`, which is where the site's own script gets it) and kept in
+  local storage, never synced. It is only ever a lookup table; the filter dropdowns are built from your saved
+  kits alone.
+- **Category** is not shown on tiles at all, and the URL slug is unreliable — it matched the real category in
+  only 3 of 14 sampled products. So after a tile is saved, the extension quietly fetches that product's page and
+  reads the category from the breadcrumb. This happens after the favourite is stored, so a slow or failed
+  request never delays the click; it just leaves the kit without a category.
+
+Favourites saved before this existed are not stranded: the manager derives all three facets from the stored
+title and `details` when a record has no explicit fields.
+
 If KingKit changes its markup, `favFromTile` and `favFromProductPage` in [src/content.js](src/content.js) are the
 two functions to update.
 
@@ -111,7 +134,8 @@ two functions to update.
 
 `test/harness.html` mocks `chrome.storage` and runs the real `storage.js` and `content.js` against markup copied
 verbatim from KingKit, covering overlay injection, data extraction, toggling, carousel clones, export/import,
-the sync-quota fallback and storage migration. It needs to be served over HTTP rather than opened as a file:
+the sync-quota fallback, storage migration, vocabulary harvesting, facet capture and category enrichment. It
+needs to be served over HTTP rather than opened as a file:
 
 ```sh
 python -m http.server 8000      # from the repository root

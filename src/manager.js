@@ -1,0 +1,630 @@
+/**
+ * The favourites manager. The same page is used as the toolbar popup and, with
+ * ?tab=1, as a full-tab view.
+ */
+(function () {
+  'use strict';
+
+  var store = globalThis.KKFav;
+  var isTab = new URLSearchParams(location.search).get('tab') === '1';
+
+  var el = {
+    body: document.body,
+    count: document.getElementById('count'),
+    openTab: document.getElementById('open-tab'),
+    search: document.getElementById('search'),
+    sort: document.getElementById('sort'),
+    viewToggle: document.getElementById('view-toggle'),
+    banner: document.getElementById('banner'),
+    bannerText: document.getElementById('banner-text'),
+    bannerDismiss: document.getElementById('banner-dismiss'),
+    list: document.getElementById('list'),
+    template: document.getElementById('fav-template'),
+    exportBtn: document.getElementById('export'),
+    importBtn: document.getElementById('import'),
+    importFile: document.getElementById('import-file'),
+    clearBtn: document.getElementById('clear'),
+    area: document.getElementById('area'),
+    usage: document.getElementById('usage'),
+    toast: document.getElementById('toast'),
+    toastText: document.getElementById('toast-text'),
+    toastUndo: document.getElementById('toast-undo'),
+    filters: document.getElementById('filters'),
+    filterClear: document.getElementById('f-clear')
+  };
+
+  // Facet key -> its <select> and the label for "no filter".
+  var FACETS = [
+    { key: 'brand', el: document.getElementById('f-brand'), all: 'All manufacturers' },
+    { key: 'scale', el: document.getElementById('f-scale'), all: 'All scales' },
+    { key: 'category', el: document.getElementById('f-category'), all: 'All categories' }
+  ];
+
+  var state = {
+    favourites: [],
+    facets: new Map(), // id -> {brand, scale, category}, derived, never stored
+    vocab: null,
+    query: '',
+    sort: 'added-desc',
+    filters: { brand: '', scale: '', category: '' }
+  };
+
+  /* --------------------------------------------------------------- format */
+
+  var rtf = new Intl.RelativeTimeFormat('en-GB', { numeric: 'auto' });
+  var UNITS = [
+    ['year', 31536e6], ['month', 2592e6], ['week', 6048e5],
+    ['day', 864e5], ['hour', 36e5], ['minute', 6e4]
+  ];
+
+  function relativeTime(ts) {
+    if (!ts) return '';
+    var diff = ts - Date.now();
+    for (var i = 0; i < UNITS.length; i += 1) {
+      if (Math.abs(diff) >= UNITS[i][1]) {
+        return rtf.format(Math.round(diff / UNITS[i][1]), UNITS[i][0]);
+      }
+    }
+    return 'just now';
+  }
+
+  function fullDate(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleString('en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function priceValue(fav) {
+    var lowest = Infinity;
+    (fav.prices || []).forEach(function (p) {
+      var match = String(p.current || '').match(/[\d]+(?:[.,]\d+)?/);
+      if (match) lowest = Math.min(lowest, parseFloat(match[0].replace(',', '')));
+    });
+    return lowest;
+  }
+
+  function formatBytes(n) {
+    if (!n) return '0 KB';
+    if (n < 1024) return n + ' B';
+    return Math.round(n / 1024) + ' KB';
+  }
+
+  /* --------------------------------------------------------------- render */
+
+  function facetsOf(fav) {
+    return state.facets.get(fav.id) || {};
+  }
+
+  /**
+   * Semantic-ish search. Each group is a set of terms treated as equivalent,
+   * so "ww1", "biplane era" kits tagged by Scalemates as "World War I", and a
+   * search for "planes" against the "Aircraft" topic all connect. Multi-word
+   * variants are matched with token boundaries so "world war i" cannot hit
+   * "world war ii".
+   */
+  var SYNONYMS = [
+    ['ww1', 'wwi', 'ww 1', 'world war 1', 'world war i', 'great war', 'first world war'],
+    ['ww2', 'wwii', 'ww 2', 'world war 2', 'world war ii', 'second world war'],
+    ['cold war', 'coldwar'],
+    ['aircraft', 'plane', 'planes', 'aeroplane', 'airplane', 'aviation', 'fighter', 'bomber'],
+    ['ship', 'ships', 'boat', 'boats', 'naval', 'navy', 'warship', 'battleship'],
+    ['tank', 'tanks', 'armour', 'armor', 'afv', 'military'],
+    ['car', 'cars', 'automotive', 'automobile'],
+    ['motorbike', 'motorcycle', 'bike'],
+    ['figure', 'figures', 'figurine'],
+    ['helicopter', 'chopper', 'rotorcraft'],
+    ['german', 'germany', 'luftwaffe', 'wehrmacht'],
+    ['british', 'britain', 'raf', 'royal air force', 'uk'],
+    ['american', 'usa', 'usaf', 'us navy', 'usn'],
+    ['japanese', 'japan', 'ijn', 'ija'],
+    ['soviet', 'russian', 'russia', 'ussr']
+  ];
+
+  function expansionsFor(term) {
+    var out = [term];
+    SYNONYMS.forEach(function (group) {
+      if (group.indexOf(term) !== -1) {
+        group.forEach(function (variant) {
+          if (variant !== term) out.push(variant);
+        });
+      }
+    });
+    return out;
+  }
+
+  function haystackOf(fav) {
+    var f = facetsOf(fav);
+    var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : null;
+    return ' ' + [
+      fav.title, fav.details, fav.note, fav.url, f.brand, f.scale, f.category,
+      sm && sm.subject, sm && sm.variant, sm && sm.era, sm && sm.year,
+      sm && sm.topicName, sm && sm.topicAlt, sm && sm.topicPath, sm && sm.topicYear,
+      sm && sm.ean
+    ].filter(Boolean).join(' ').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  }
+
+  /** Collapse multi-word synonym phrases ("great war") into their group's
+      single-token representative, so splitting on spaces cannot break them. */
+  function foldPhrases(query) {
+    var q = ' ' + query + ' ';
+    SYNONYMS.forEach(function (group) {
+      var token = group.find(function (v) { return v.indexOf(' ') === -1; }) || group[0];
+      group.forEach(function (variant) {
+        if (variant.indexOf(' ') === -1) return;
+        var at = q.indexOf(' ' + variant + ' ');
+        if (at !== -1) q = q.split(' ' + variant + ' ').join(' ' + token + ' ');
+      });
+    });
+    return q.trim();
+  }
+
+  function matches(fav, query) {
+    if (!query) return true;
+    var haystack = haystackOf(fav);
+    // Every search term must match; a term matches if any of its synonym
+    // variants occurs. Single words match as substrings (so "junker" finds
+    // Junkers); multi-word variants require token boundaries.
+    return foldPhrases(query.replace(/[^a-z0-9\s]/gi, ' ')).split(/\s+/).filter(Boolean)
+      .every(function (term) {
+        return expansionsFor(term).some(function (variant) {
+          return variant.indexOf(' ') === -1
+            ? haystack.indexOf(variant) !== -1
+            : haystack.indexOf(' ' + variant + ' ') !== -1;
+        });
+      });
+  }
+
+  /**
+   * `except` skips one facet's own filter, which is what makes the dropdowns
+   * behave: the scale list is counted against everything the other filters
+   * allow, so picking a manufacturer narrows the scales on offer but does not
+   * empty the manufacturer list itself.
+   */
+  function passesFilters(fav, except) {
+    var f = facetsOf(fav);
+    for (var i = 0; i < FACETS.length; i += 1) {
+      var key = FACETS[i].key;
+      if (key === except) continue;
+      if (state.filters[key] && f[key] !== state.filters[key]) return false;
+    }
+    return true;
+  }
+
+  function anyFilterActive() {
+    return FACETS.some(function (f) { return state.filters[f.key]; });
+  }
+
+  /** 1/24 before 1/48 before 1/72, with unparseable values last. */
+  function byScale(a, b) {
+    var da = parseFloat(String(a).split('/')[1]);
+    var db = parseFloat(String(b).split('/')[1]);
+    if (isNaN(da)) da = Infinity;
+    if (isNaN(db)) db = Infinity;
+    return da - db || String(a).localeCompare(String(b), 'en-GB');
+  }
+
+  /**
+   * Rebuild the facet dropdowns from the favourites themselves, so only values
+   * actually present are offered — with a count beside each.
+   */
+  function renderFilters(searched) {
+    el.filters.hidden = state.favourites.length < 2;
+    if (el.filters.hidden) return;
+
+    FACETS.forEach(function (facet) {
+      var counts = new Map();
+      searched.filter(function (fav) { return passesFilters(fav, facet.key); })
+        .forEach(function (fav) {
+          var value = facetsOf(fav)[facet.key];
+          if (!value) return;
+          counts.set(value, (counts.get(value) || 0) + 1);
+        });
+
+      var values = Array.from(counts.keys())
+        .sort(facet.key === 'scale' ? byScale : function (a, b) { return a.localeCompare(b, 'en-GB'); });
+
+      // Keep the active choice selectable even once nothing matches it.
+      var current = state.filters[facet.key];
+      if (current && !counts.has(current)) values.unshift(current);
+
+      var select = facet.el;
+      select.textContent = '';
+      select.appendChild(new Option(facet.all, ''));
+      values.forEach(function (value) {
+        select.appendChild(new Option(value + ' (' + (counts.get(value) || 0) + ')', value));
+      });
+      select.value = current;
+      select.disabled = !values.length;
+      select.classList.toggle('is-active', Boolean(current));
+    });
+
+    el.filterClear.hidden = !anyFilterActive();
+    el.filters.classList.toggle('has-clear', anyFilterActive());
+  }
+
+  function sortFavourites(items, mode) {
+    var sorted = items.slice();
+    sorted.sort(function (a, b) {
+      switch (mode) {
+        case 'added-asc': return (a.addedAt || 0) - (b.addedAt || 0);
+        case 'title-asc': return (a.title || '').localeCompare(b.title || '', 'en-GB');
+        case 'title-desc': return (b.title || '').localeCompare(a.title || '', 'en-GB');
+        case 'price-asc': return priceValue(a) - priceValue(b);
+        case 'price-desc': return priceValue(b) - priceValue(a);
+        default: return (b.addedAt || 0) - (a.addedAt || 0);
+      }
+    });
+    return sorted;
+  }
+
+  function emptyState(filtered) {
+    var wrap = document.createElement('div');
+    wrap.className = 'empty';
+    wrap.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.7 4.7 13.4a4.6 4.6 0 0 1 0-6.5 4.6 4.6 0 0 1 6.5 0l.8.8.8-.8a4.6 4.6 0 0 1 6.5 0 4.6 4.6 0 0 1 0 6.5Z"/></svg>' +
+      (filtered
+        ? '<h2>No matches</h2><p>Nothing here matches your search and filters.</p>'
+        : '<h2>No favourites yet</h2><p>Browse kingkit.co.uk and click the heart in the corner of any product image.</p>');
+    return wrap;
+  }
+
+  function renderPrices(fav) {
+    var parts = [];
+    (fav.prices || []).forEach(function (p) {
+      var label = p.label ? p.label + ' ' : '';
+      if (p.current) {
+        parts.push('<span>' + escapeHtml(label + p.current) +
+          (p.old ? '<span class="was">' + escapeHtml(p.old) + '</span>' : '') + '</span>');
+      } else if (p.note) {
+        parts.push('<span class="oos">' + escapeHtml(label + p.note) + '</span>');
+      }
+    });
+    return parts.join('');
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function buildCard(fav) {
+    var node = el.template.content.firstElementChild.cloneNode(true);
+    node.dataset.id = fav.id;
+
+    var media = node.querySelector('.fav__media');
+    var img = node.querySelector('.fav__media img');
+    var title = node.querySelector('.fav__title');
+
+    media.href = fav.url;
+    title.href = fav.url;
+    title.textContent = fav.title || fav.url;
+
+    if (fav.image) {
+      img.src = fav.image;
+      img.alt = fav.title || '';
+      // Thumbnails are hotlinked from kingkit.co.uk; if one 404s or the site
+      // refuses the request, show a placeholder rather than a broken image.
+      img.addEventListener('error', function () {
+        media.classList.add('is-broken');
+        img.remove();
+      });
+    } else {
+      media.classList.add('is-broken');
+      img.remove();
+    }
+
+    var f = facetsOf(fav);
+    var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : null;
+    var details = node.querySelector('.fav__details');
+    var line = [f.brand, f.scale, f.category, sm && sm.year]
+      .filter(Boolean).join(' · ') || fav.details;
+    if (line) details.textContent = line; else details.hidden = true;
+
+    var smLink = node.querySelector('.js-sm-link');
+    if (sm && sm.url) {
+      smLink.href = sm.url;
+      smLink.hidden = false;
+      smLink.title = 'View on Scalemates' + (sm.year ? ' (released ' + sm.year + ')' : '');
+    }
+
+    var prices = node.querySelector('.fav__prices');
+    var priceHtml = renderPrices(fav);
+    if (priceHtml) prices.innerHTML = priceHtml; else prices.hidden = true;
+
+    var noteText = node.querySelector('.fav__note-text');
+    if (fav.note) {
+      noteText.textContent = fav.note;
+      noteText.hidden = false;
+    }
+
+    var added = node.querySelector('.fav__added');
+    added.textContent = relativeTime(fav.addedAt);
+    added.dateTime = fav.addedAt ? new Date(fav.addedAt).toISOString() : '';
+    added.title = 'Saved ' + fullDate(fav.addedAt);
+
+    node.querySelector('.js-note-input').value = fav.note || '';
+    node.querySelector('.js-sm-input').value = (fav.sm && fav.sm.url) || '';
+    return node;
+  }
+
+  function render() {
+    var query = state.query.trim().toLowerCase();
+    var searched = state.favourites.filter(function (f) { return matches(f, query); });
+    renderFilters(searched);
+
+    var visible = sortFavourites(
+      searched.filter(function (f) { return passesFilters(f, null); }),
+      state.sort
+    );
+
+    el.list.textContent = '';
+    if (!visible.length) {
+      el.list.appendChild(emptyState((Boolean(query) || anyFilterActive()) && state.favourites.length > 0));
+    } else {
+      var frag = document.createDocumentFragment();
+      visible.forEach(function (fav) { frag.appendChild(buildCard(fav)); });
+      el.list.appendChild(frag);
+    }
+
+    el.count.textContent = visible.length === state.favourites.length
+      ? String(state.favourites.length)
+      : visible.length + '/' + state.favourites.length;
+    el.exportBtn.disabled = !state.favourites.length;
+    el.clearBtn.disabled = !state.favourites.length;
+  }
+
+  async function load() {
+    state.vocab = await store.getVocab();
+    state.favourites = await store.list();
+    state.facets = new Map();
+    state.favourites.forEach(function (fav) {
+      state.facets.set(fav.id, store.facetsFor(fav, state.vocab));
+    });
+    render();
+    updateUsage();
+  }
+
+  async function updateUsage() {
+    var settings = await store.getSettings();
+    var stats = await store.usage();
+    var active = stats[settings.area] || stats.local;
+    var quota = active.quota ? ' of ' + formatBytes(active.quota) : '';
+    el.usage.textContent = active.unavailable
+      ? 'unavailable'
+      : formatBytes(active.used) + quota + ' used';
+
+    el.banner.hidden = !settings.syncFallback;
+    if (settings.syncFallback) {
+      el.bannerText.textContent =
+        'Chrome sync storage is full or unavailable, so recent favourites were saved on this device only.';
+    }
+  }
+
+  /* --------------------------------------------------------------- toasts */
+
+  var toastTimer = null;
+  var undoAction = null;
+
+  function toast(message, undo) {
+    el.toastText.textContent = message;
+    undoAction = undo || null;
+    el.toastUndo.hidden = !undo;
+    el.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      el.toast.hidden = true;
+      undoAction = null;
+    }, 5000);
+  }
+
+  el.toastUndo.addEventListener('click', function () {
+    var action = undoAction;
+    el.toast.hidden = true;
+    undoAction = null;
+    if (action) action();
+  });
+
+  /* -------------------------------------------------------------- actions */
+
+  el.list.addEventListener('click', function (event) {
+    var card = event.target.closest('.fav');
+    if (!card) return;
+    var id = card.dataset.id;
+
+    if (event.target.closest('.js-remove')) {
+      var record = state.favourites.find(function (f) { return f.id === id; });
+      card.classList.add('is-going');
+      store.remove(id).then(function () {
+        toast('Removed', function () { if (record) store.add(record); });
+      });
+      return;
+    }
+
+    if (event.target.closest('.js-note')) {
+      var editor = card.querySelector('.fav__note-edit');
+      editor.hidden = !editor.hidden;
+      if (!editor.hidden) card.querySelector('.js-note-input').focus();
+      return;
+    }
+
+    if (event.target.closest('.js-note-save')) {
+      saveNote(card, id);
+    }
+  });
+
+  el.list.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter') return;
+    if (!event.target.classList.contains('js-note-input') &&
+        !event.target.classList.contains('js-sm-input')) return;
+    var card = event.target.closest('.fav');
+    saveNote(card, card.dataset.id);
+  });
+
+  function saveNote(card, id) {
+    var note = card.querySelector('.js-note-input').value.trim();
+    var smUrl = card.querySelector('.js-sm-input').value.trim();
+    var fav = state.favourites.find(function (x) { return x.id === id; });
+    var currentUrl = (fav && fav.sm && fav.sm.url) || '';
+
+    var work = store.update(id, { note: note });
+
+    if (smUrl && smUrl !== currentUrl) {
+      // A pasted kit link: the worker fetches that one page for its details.
+      work = work.then(function () {
+        return new Promise(function (resolve) {
+          chrome.runtime.sendMessage({ type: 'kkf:linkScalemates', id: id, url: smUrl }, resolve);
+        });
+      }).then(function (reply) {
+        toast(reply && reply.ok
+          ? 'Linked to Scalemates' + (reply.sm && reply.sm.year ? ' (' + reply.sm.year + ')' : '')
+          : 'Could not link: ' + ((reply && reply.error) || 'no reply'));
+      });
+    } else if (!smUrl && currentUrl) {
+      // Cleared: forget the link (and let automatic lookup have another go).
+      work = work.then(function () { return store.update(id, { sm: null }); })
+        .then(function () { toast('Scalemates link removed'); });
+    } else {
+      work = work.then(function () { toast(note ? 'Note saved' : 'Saved'); });
+    }
+
+    work.then(function () {
+      var editor = card.querySelector('.fav__note-edit');
+      if (editor) editor.hidden = true;
+    });
+  }
+
+  var searchTimer = null;
+  el.search.addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      state.query = el.search.value;
+      render();
+    }, 120);
+  });
+
+  FACETS.forEach(function (facet) {
+    facet.el.addEventListener('change', function () {
+      state.filters[facet.key] = facet.el.value;
+      render();
+    });
+  });
+
+  el.filterClear.addEventListener('click', function () {
+    FACETS.forEach(function (facet) { state.filters[facet.key] = ''; });
+    render();
+  });
+
+  el.sort.addEventListener('change', function () {
+    state.sort = el.sort.value;
+    store.setSettings({ sort: state.sort });
+    render();
+  });
+
+  el.viewToggle.addEventListener('click', function () {
+    var next = el.body.classList.toggle('view-list') ? 'list' : 'grid';
+    store.setSettings({ view: next });
+  });
+
+  el.openTab.addEventListener('click', function () {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/manager.html?tab=1') });
+    window.close();
+  });
+
+  el.exportBtn.addEventListener('click', async function () {
+    var payload = await store.exportAll();
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'kingkit-favourites-' + new Date().toISOString().slice(0, 10) + '.json';
+    link.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+
+  el.importBtn.addEventListener('click', function () { el.importFile.click(); });
+
+  el.importFile.addEventListener('change', async function () {
+    var file = el.importFile.files && el.importFile.files[0];
+    if (!file) return;
+    try {
+      var result = await store.importAll(JSON.parse(await file.text()));
+      var bits = [result.added + ' imported'];
+      if (result.skipped) bits.push(result.skipped + ' already saved');
+      if (result.failed) bits.push(result.failed + ' skipped');
+      toast(bits.join(', '));
+    } catch (err) {
+      console.error('[KingKit Favourites] import failed:', err);
+      toast('That file could not be read as a favourites export');
+    }
+    el.importFile.value = '';
+  });
+
+  // Two-step confirmation — a native confirm() can dismiss the popup.
+  var clearTimer = null;
+  el.clearBtn.addEventListener('click', async function () {
+    if (!el.clearBtn.classList.contains('is-confirming')) {
+      el.clearBtn.classList.add('is-confirming');
+      el.clearBtn.textContent = 'Tap again to confirm';
+      clearTimer = setTimeout(resetClear, 4000);
+      return;
+    }
+    clearTimeout(clearTimer);
+    var backup = state.favourites.slice();
+    await store.clear();
+    resetClear();
+    toast('Cleared ' + backup.length + ' favourites', function () {
+      store.importAll(backup);
+    });
+  });
+
+  function resetClear() {
+    el.clearBtn.classList.remove('is-confirming');
+    el.clearBtn.textContent = 'Clear all';
+  }
+
+  el.area.addEventListener('change', async function () {
+    var target = el.area.value;
+    el.area.disabled = true;
+    try {
+      var moved = await store.migrate(target);
+      toast(target === 'sync'
+        ? 'Now syncing ' + moved + ' favourites to your Chrome account'
+        : 'Now storing ' + moved + ' favourites on this device only');
+    } catch (err) {
+      console.error('[KingKit Favourites] storage move failed:', err);
+      toast('Could not move favourites — they are unchanged');
+      var settings = await store.getSettings();
+      el.area.value = settings.area;
+    }
+    el.area.disabled = false;
+    updateUsage();
+  });
+
+  el.bannerDismiss.addEventListener('click', function () {
+    store.setSettings({ syncFallback: false });
+    el.banner.hidden = true;
+  });
+
+  var smEnabled = document.getElementById('sm-enabled');
+  smEnabled.addEventListener('change', function () {
+    store.setSettings({ scalemates: smEnabled.checked });
+  });
+
+  store.onChange(load);
+
+  /* ----------------------------------------------------------------- boot */
+
+  (async function init() {
+    if (isTab) el.body.classList.add('is-tab');
+    var settings = await store.getSettings();
+    if (settings.view === 'list') el.body.classList.add('view-list');
+    state.sort = settings.sort || 'added-desc';
+    el.sort.value = state.sort;
+    el.area.value = settings.area;
+    smEnabled.checked = settings.scalemates !== false;
+    await load();
+    el.search.focus();
+  })();
+})();

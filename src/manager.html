@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KingKit Favourites</title>
+  <link rel="stylesheet" href="manager.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__title">
+      <svg class="topbar__mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 20.7 4.7 13.4a4.6 4.6 0 0 1 0-6.5 4.6 4.6 0 0 1 6.5 0l.8.8.8-.8a4.6 4.6 0 0 1 6.5 0 4.6 4.6 0 0 1 0 6.5Z"/>
+      </svg>
+      <h1>Favourites</h1>
+      <span class="pill" id="count">0</span>
+    </div>
+    <button type="button" class="icon-btn" id="open-tab" title="Open in a full tab" aria-label="Open in a full tab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+    </button>
+  </header>
+
+  <div class="toolbar">
+    <label class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" id="search" placeholder="Search saved kits…" autocomplete="off" aria-label="Search favourites">
+    </label>
+    <select id="sort" aria-label="Sort favourites">
+      <option value="added-desc">Newest first</option>
+      <option value="added-asc">Oldest first</option>
+      <option value="title-asc">Title A–Z</option>
+      <option value="title-desc">Title Z–A</option>
+      <option value="price-asc">Price low–high</option>
+      <option value="price-desc">Price high–low</option>
+    </select>
+    <button type="button" class="icon-btn" id="view-toggle" title="Switch layout" aria-label="Switch layout">
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-grid"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-list"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+  </div>
+
+  <div class="filters" id="filters" hidden>
+    <select id="f-brand" aria-label="Filter by manufacturer"></select>
+    <select id="f-scale" aria-label="Filter by scale"></select>
+    <select id="f-category" aria-label="Filter by category"></select>
+    <button type="button" class="icon-btn icon-btn--sm" id="f-clear" title="Clear filters" aria-label="Clear filters" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <div class="banner" id="banner" hidden>
+    <span id="banner-text"></span>
+    <button type="button" class="link-btn" id="banner-dismiss">Dismiss</button>
+  </div>
+
+  <main id="list" class="list" aria-live="polite"></main>
+
+  <template id="fav-template">
+    <article class="fav">
+      <a class="fav__media" target="_blank" rel="noopener">
+        <img alt="" loading="lazy">
+      </a>
+      <div class="fav__body">
+        <a class="fav__title" target="_blank" rel="noopener"></a>
+        <p class="fav__details"></p>
+        <p class="fav__prices"></p>
+        <p class="fav__note-text" hidden></p>
+        <div class="fav__foot">
+          <time class="fav__added"></time>
+          <div class="fav__actions">
+            <a class="icon-btn icon-btn--sm fav__sm-link js-sm-link" target="_blank" rel="noopener" title="View on Scalemates" aria-label="View on Scalemates" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7"/></svg>
+            </a>
+            <button type="button" class="icon-btn icon-btn--sm js-note" title="Edit note and Scalemates link" aria-label="Edit note and Scalemates link">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16Z"/></svg>
+            </button>
+            <button type="button" class="icon-btn icon-btn--sm icon-btn--danger js-remove" title="Remove from favourites" aria-label="Remove from favourites">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M6 7l1 12h10l1-12"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="fav__note-edit" hidden>
+          <input type="text" class="js-note-input" placeholder="e.g. wanted for the 1/48 build" maxlength="240">
+          <input type="url" class="js-sm-input" placeholder="Scalemates kit URL (optional)">
+          <button type="button" class="btn btn--sm js-note-save">Save</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <footer class="footer">
+    <div class="footer__row">
+      <button type="button" class="btn" id="export">Export</button>
+      <button type="button" class="btn" id="import">Import</button>
+      <button type="button" class="btn btn--danger" id="clear">Clear all</button>
+      <input type="file" id="import-file" accept="application/json,.json" hidden>
+    </div>
+    <div class="footer__row footer__row--meta">
+      <label class="storage">
+        Storage
+        <select id="area" aria-label="Where favourites are stored">
+          <option value="sync">Synced to my Chrome account</option>
+          <option value="local">This device only</option>
+        </select>
+      </label>
+      <label class="storage" title="Look new favourites up on scalemates.com to add release year and subject details">
+        <input type="checkbox" id="sm-enabled"> Scalemates
+      </label>
+      <span class="meter" id="usage"></span>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast" role="status" hidden>
+    <span id="toast-text"></span>
+    <button type="button" class="link-btn" id="toast-undo" hidden>Undo</button>
+  </div>
+
+  <script src="storage.js"></script>
+  <script src="manager.js"></script>
+</body>
+</html>

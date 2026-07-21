@@ -25,12 +25,28 @@ signed into with the same Google account.
   price row including sale prices, the crossed-out original, and stock notes such as "Out of stock" or
   "3 in stock".
 
+**Watching for changes**
+
+KingKit is largely one-off second-hand stock, so the extension quietly re-checks each favourite's product page
+roughly once a day and flags what changed:
+
+- **Price drops** (and rises), per condition: a card gains a chip like *Pre-owned ↓ £19.99 (was £24.00)*.
+- **Restocks** — a condition that was out of stock is available again.
+- **Out of stock / no longer listed** — so you know a kit got away.
+- The toolbar badge turns **blue with the number of unseen alerts** when there is news, and reverts to the red
+  favourites count once you have dismissed them (the ✕ on a chip marks that kit's alerts read).
+- Checks run one at a time with a several-second gap, at most a small batch per pass; a kit whose page has gone
+  is never checked again, and the whole watcher can be switched off with the **Price watch** tick-box in the
+  footer.
+
 **In the favourites list** (click the toolbar icon)
 
 ![The favourites manager in its full-tab view: search, filters, release years, Scalemates links, a note, and the footer controls](docs/manager.png)
 
 - **Grid or list layout**, whichever you prefer — the choice is remembered.
-- **Filter by manufacturer, scale and category.** The dropdowns are built from
+- **Kit status** — mark each kit *wanted*, *bought* or *built* from a small selector on its card (bought tints
+  blue, built green), turning the list into a stash manager. Status is a filter facet like the others.
+- **Filter by status, manufacturer, scale and category.** The dropdowns are built from
   your own saved kits, not from KingKit's full lists — with 20 favourites you
   pick from the handful of manufacturers you have actually saved, not 1130 of
   them. Each option shows how many kits it holds, and choosing one narrows the
@@ -47,7 +63,11 @@ signed into with the same Google account.
     "battle of britain" surfaces a Spitfire, "german ww1" a Junkers D.I, "imperial japanese navy" the Yamato —
     none of which share a word with their query. Anything the rules already found is not repeated; semantic
     matches are appended below, best first.
-- **Sort** by newest, oldest, title, or price (low–high / high–low).
+- **Sort** by newest, oldest, title, price (low–high / high–low), or release year (new–old / old–new; kits
+  without a known year sort last).
+- **Copy as text** — the Copy button puts the currently visible list (after search, filters and sort) on the
+  clipboard as markdown, one line per kit with price, year and links — ready to paste into a forum post or a
+  gift list.
 - **Notes** — add a private reminder to any kit ("wanted for the winter build", "check postage").
 - **Remove** individual items, or clear the whole list — both undoable.
 - **Open in a full tab** for a wider, multi-column view when the list gets long.
@@ -93,11 +113,20 @@ cached by the browser from then on; embedding a favourite takes ~100 ms and each
 
 Design notes, all measured against live model output rather than guessed:
 
-- Each favourite is embedded from a short descriptive sentence — subject, nation, era, topic
-  ("junkers d.i (junkers j 9), short-fuselage version. german world war i propeller aircraft") — because long
-  keyword soups measurably halve similarity scores under mean pooling. Catalogue numbers, scales and years stay
-  out of the vector; exact tokens are the rules tier's job. The nation comes from the Scalemates topic flag,
-  captured during enrichment.
+- **The model was benchmarked, and the old workhorse won.** all-MiniLM-L6-v2 was compared against
+  bge-small-en-v1.5 and gte-small on this corpus (11 probe queries × 4 text configurations): MiniLM took top-1
+  ranking 8/9 versus 7/9 for both newer models, with roughly twice gte's separation between right and wrong
+  answers — their MTEB scores do not transfer to short hobby-kit texts, and their compressed similarity
+  distributions are hostile to thresholding. So MiniLM stays.
+- **Each favourite is embedded as two vectors** — its subject sentence and its descriptor sentence — and search
+  takes the better cosine of the two, which is what lets "battle of britain" surface *both* British WWII
+  fighters. When a kit's descriptors are too thin to stand alone (a bare category), a single full-text vector
+  is stored instead: measured, the lone short subject vector otherwise inflates false positives.
+- The descriptor text draws on the kit's Scalemates **Markings section** — operators such as *Deutsche
+  Luftstreitkräfte (Imperial German Air Force)* and campaigns such as *Western Front* — fetched once from the
+  kit page after a successful match (kit pages, unlike search, are unrestricted in their robots.txt; this takes
+  a favourite's lifetime request total to at most three). Catalogue numbers, scales and years stay out of the
+  vector; exact tokens are the rules tier's job.
 - A semantic match must clear an absolute similarity floor *and* sit a clear gap above the collection's mean
   for that query. The gap test is what keeps nonsense out: when nothing truly matches, every similarity
   compresses into a narrow band and the top item's gap collapses, even though its rank stays first.
@@ -145,8 +174,8 @@ extension and safe to dismiss.
 | Permission | Why |
 | --- | --- |
 | `storage` | To save your favourites and preferences. |
-| `alarms` | To resume an interrupted Scalemates lookup queue. |
-| `*://*.kingkit.co.uk/*` | To add the heart overlay to KingKit pages. |
+| `alarms` | To schedule the daily price checks and resume interrupted lookup queues. |
+| `*://*.kingkit.co.uk/*` | The heart overlay, and the daily re-check of favourited products. |
 | `*://*.scalemates.com/*` | To look favourited kits up for release year and subject details. |
 
 There are no analytics and no remote code. The extension talks to exactly three sites: kingkit.co.uk (the
@@ -163,7 +192,8 @@ src/content.js        Injects the heart overlay and reads product details off th
 src/content.css       Overlay and toast styling
 src/scalemates.js     Scalemates lookup engine: title parsing, search parsing, match scoring
 src/semantic.js       Dense-vector layer: embedding text, vector store, cosine search
-src/background.js     Service worker — badge count and the polite Scalemates lookup queue
+src/watch.js          Price & stock watcher: product-page parsing, diffing, alert records
+src/background.js     Service worker — badge, Scalemates lookups, daily price checks
 src/manager.html/.css/.js   The favourites list, used as both popup and full-tab page
 vendor/               Transformers.js + ONNX WASM runtime (pinned 3.7.6, unmodified)
 docs/                 README screenshots
@@ -209,10 +239,11 @@ two functions to update.
 
 ### Running the tests
 
-`test/harness.html` mocks `chrome.storage` and runs the real `storage.js` and `content.js` against markup copied
-verbatim from KingKit, covering overlay injection, data extraction, toggling, carousel clones, export/import,
-the sync-quota fallback, storage migration, vocabulary harvesting, facet capture and category enrichment. It
-needs to be served over HTTP rather than opened as a file:
+`test/harness.html` mocks `chrome.storage` and runs the real extension modules against markup captured verbatim
+from KingKit and Scalemates: overlay injection, data extraction, export/import, the sync-quota fallback, storage
+migration, vocabulary harvesting, Scalemates matching and enrichment, the semantic layer (with a deterministic
+fake embedder), and the price-watcher's parsing, diffing and cadence logic. It needs to be served over HTTP
+rather than opened as a file:
 
 ```sh
 python tools/serve.py 8000      # from the repository root
@@ -245,9 +276,13 @@ the Storage dropdown to "This device only".
 load from kingkit.co.uk.
 
 **A kit has no Scalemates link or year.** Either the lookup found no confident match (accessories and rare kits
-often aren't on Scalemates), or lookups are switched off, or the queue is in its post-throttle pause. To link it
+occasionally aren't on Scalemates), or lookups are switched off, or the queue is in its post-throttle pause. To link it
 by hand: pencil icon → paste the Scalemates kit URL → Save. Pasting a different URL replaces a wrong link;
 clearing the field removes it and lets the automatic lookup try again.
+
+**No price alerts appear.** Checks happen at most once per ~20 hours per kit, only while Chrome is running, and
+only when the **Price watch** tick-box is on. A kit whose product page has vanished shows a one-off "No longer
+listed" alert and is not checked again.
 
 ## Licence
 

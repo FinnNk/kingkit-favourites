@@ -44,7 +44,9 @@
     }
   };
   window.chrome.runtime = {
-    getURL: p => './' + p.replace(/^src\//, ''),
+    // Test pages sit one level below the repo root (src/ or test/), so
+    // extension-root paths like "vendor/x" resolve via "../".
+    getURL: p => p.startsWith('src/') ? './' + p.slice(4) : '../' + p,
     lastError: null,
     // Simulates the worker's manual-link handler when the engine + fixtures
     // are loaded on the page (manager tests).

@@ -5,6 +5,9 @@
   "description": "Save KingKit products for later with a one-click heart on every product image, then browse and manage them in one list.",
   "minimum_chrome_version": "102",
   "permissions": ["storage", "alarms"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "host_permissions": [
     "*://*.kingkit.co.uk/*",
     "*://*.scalemates.com/*"

@@ -193,6 +193,7 @@
   t('sm: topic header captured for semantic search',
     roden[0].topic && roden[0].topic.name === 'Junkers D.I' && roden[0].topic.alt === 'Junkers J 9' &&
     roden[0].topic.path === 'Aircraft Propeller', JSON.stringify(roden[0].topic));
+  t('sm: subject nation read from the topic flag', roden[0].topic.nation === 'DR', roden[0].topic.nation);
 
   const sh = KKSM.parseSearchHtml(FX.SEARCH_SH_48206);
   t('sm: parses multiple boxings', sh.length === 2 && sh[0].year === '2021' && sh[1].year === '2020');
@@ -267,6 +268,94 @@
     kit.year === '2007' && kit.brand === 'Roden' && kit.number === '434' && kit.scale === '1:48' && kit.ean === '4823017700963',
     JSON.stringify(kit));
   t('sm: kit page url stripped of query', kit.url === 'https://www.scalemates.com/kits/roden-434-junkers-di--122091');
+
+  /* ================= semantic layer (KKSem) ================= */
+
+  // Deterministic fake embedder: bag-of-axes over a tiny lexicon, so related
+  // words share an axis and cosine behaves like the real model in miniature.
+  const AXES = { aircraft: 0, plane: 0, biplane: 0, junkers: 0, fokker: 0,
+                 ship: 1, battleship: 1, yamato: 1, warship: 1,
+                 truck: 2, lorry: 2, cargo: 2, m35a2: 2,
+                 german: 3, japanese: 4, war: 5, i: 6, ii: 7 };
+  const fakeEmbed = async text => {
+    const v = new Float32Array(KKSem.DIM);
+    String(text).toLowerCase().split(/[^a-z0-9]+/).forEach(w => {
+      if (w in AXES) v[AXES[w]] += 1;
+    });
+    if (!v.some(x => x)) v[KKSem.DIM - 1] = 1e-4; // never a zero vector
+    return v;
+  };
+  KKSem._setEmbedderForTests(fakeEmbed);
+
+  // 23. primitives
+  const rt = KKSem.vecFromB64(KKSem.b64FromVec(new Float32Array([0.25, -1.5, 3.75])));
+  t('sem: base64 round-trip preserves float vectors', rt.length === 3 && rt[0] === 0.25 && rt[1] === -1.5 && rt[2] === 3.75);
+  const nv = KKSem.normalise(new Float32Array([3, 4]));
+  t('sem: normalise yields unit vectors', Math.abs(KKSem.cosine(nv, nv) - 1) < 1e-6);
+  t('sem: hash changes with text', KKSem.hash('abc') !== KKSem.hash('abd'));
+
+  // 24. embed text composition — short and descriptive by design: subject,
+  // nation, era, topic; NO catalogue numbers, scales, brands or years, which
+  // measurably dilute the vector (see comment in semantic.js).
+  const embTxt = KKSem.textFor(
+    { title: 'RODEN 1/48 434 JUNKERS D.I', note: 'gift idea',
+      sm: { status: 'matched', era: 'World War I', subject: 'Junkers D.I', variant: 'short-fuselage version',
+            topicAlt: 'Junkers J 9', topicPath: 'Aircraft Propeller', topicNation: 'DR', year: '2007' } },
+    { brand: 'Roden', scale: '1/48', category: 'Aircraft Model Kits' });
+  t('sem: embed text is subject + nation + era + topic + note',
+    embTxt === 'junkers d.i (junkers j 9), short-fuselage version. german world war i propeller aircraft. gift idea',
+    embTxt);
+  t('sem: numbers, scale and year kept out of the vector',
+    embTxt.indexOf('434') === -1 && embTxt.indexOf('1/48') === -1 && embTxt.indexOf('2007') === -1);
+  t('sem: unmatched fav falls back to cleaned title + category',
+    KKSem.textFor({ title: 'TAKOM 1/16 01013 JAPANESE NAVY BATTLESHIP YAMATO ANCHORS', brand: 'Takom' },
+                  { category: 'Model Ships Kits' })
+      === 'japanese navy battleship yamato anchors. ships');
+  t('sem: unmatched sm contributes nothing',
+    KKSem.textFor({ title: 'X', sm: { status: 'nomatch', era: 'SHOULD NOT APPEAR' } }, null).indexOf('appear') === -1);
+  t('sem: unknown nation code degrades silently',
+    KKSem.textFor({ title: 'Y', sm: { status: 'matched', subject: 'Thing', topicNation: 'ZZ', era: 'Modern' } }, null)
+      === 'thing. modern');
+
+  // 25. vector store lifecycle
+  await chrome.storage.local.remove(
+    Object.keys(chrome.storage.local._bag).filter(k => k.startsWith('kkfv:')));
+  const semFavs = [
+    { id: '/p/junkers', title: 'RODEN 434 JUNKERS BIPLANE', sm: null },
+    { id: '/p/yamato', title: 'TAKOM YAMATO BATTLESHIP' },
+    { id: '/p/truck', title: 'SKYBOW M35A2 CARGO TRUCK' }
+  ];
+  const nDone = await KKSem.ensureVectors(semFavs, null, 10);
+  t('sem: ensureVectors embeds every new favourite', nDone === 3, String(nDone));
+  let stored = await KKSem.storedVectors();
+  t('sem: vectors persisted to local storage', stored.size === 3 &&
+    Object.keys(chrome.storage.local._bag).filter(k => k.startsWith('kkfv:')).length === 3);
+  t('sem: unchanged favourites are not re-embedded', (await KKSem.ensureVectors(semFavs, null, 10)) === 0);
+
+  semFavs[0].title = 'RODEN 434 JUNKERS BIPLANE FIGHTER';
+  t('sem: changed text is re-embedded', (await KKSem.ensureVectors(semFavs, null, 10)) === 1);
+
+  t('sem: budget caps work per call', (await KKSem.ensureVectors(
+    semFavs.map(f => ({ ...f, title: f.title + ' v2' })), null, 2)) === 2);
+
+  const pruned = await KKSem.ensureVectors(semFavs.slice(0, 2), null, 10);
+  stored = await KKSem.storedVectors();
+  t('sem: vectors for removed favourites are pruned', !stored.has('/p/truck') && stored.size === 2, String(stored.size));
+
+  // 26. search semantics via the fake model
+  await KKSem.ensureVectors(semFavs, null, 10);
+  const sims = await KKSem.search('lorry');
+  t('sem: search returns a sim for every stored vector', sims.size === 3);
+  t('sem: "lorry" lands on the truck via shared axis',
+    sims.get('/p/truck') > 0.5 && sims.get('/p/truck') > (sims.get('/p/yamato') || 0) + 0.3,
+    JSON.stringify([...sims].map(([k, v]) => k + ':' + v.toFixed(2))));
+  const simsPlane = await KKSem.search('biplane');
+  t('sem: "biplane" lands on the junkers', simsPlane.get('/p/junkers') > 0.5 && simsPlane.get('/p/junkers') > simsPlane.get('/p/truck'));
+
+  // 27. graceful degradation without a model
+  KKSem._setEmbedderForTests(null);
+  const noModelInit = KKSem.init; // real init would try dynamic import; stub it
+  KKSem._setEmbedderForTests(fakeEmbed); // restore for any later use
 
   const failures = out.filter(l => l.startsWith('[FAIL]'));
   document.getElementById('results').innerHTML =

@@ -124,6 +124,13 @@
     vocab.categories.includes('Aircraft Model Kits') && vocab.categories.length === 5, String(vocab.categories.length));
   t('vocabulary is stored locally, never synced',
     'kkf.vocab' in chrome.storage.local._bag && !('kkf.vocab' in chrome.storage.sync._bag));
+  t('brand ids harvested for Kit Finder deep links',
+    vocab.brandIds && vocab.brandIds['special hobby'] === '5' && vocab.brandIds['takom'] === '6',
+    JSON.stringify(vocab.brandIds));
+  t('category ids harvested from the Kit Finder form',
+    vocab.categoryIds && vocab.categoryIds['aircraft model kits'] === '26', JSON.stringify(vocab.categoryIds));
+  t('a vocabulary without brand ids counts as stale (forces refresh)',
+    KKFav.vocabIsStale({ brands: ['X'], categories: ['Y'], fetchedAt: Date.now() }) === true);
 
   // 13. facet capture at save time
   await KKFav.clear();
@@ -194,6 +201,8 @@
     roden[0].topic && roden[0].topic.name === 'Junkers D.I' && roden[0].topic.alt === 'Junkers J 9' &&
     roden[0].topic.path === 'Aircraft Propeller', JSON.stringify(roden[0].topic));
   t('sm: subject nation read from the topic flag', roden[0].topic.nation === 'DR', roden[0].topic.nation);
+  t('sm: topic page url captured for deep links',
+    roden[0].topic.url === 'https://www.scalemates.com/topics/topic.php?id=2660', roden[0].topic.url);
 
   const sh = KKSM.parseSearchHtml(FX.SEARCH_SH_48206);
   t('sm: parses multiple boxings', sh.length === 2 && sh[0].year === '2021' && sh[1].year === '2020');
@@ -244,6 +253,7 @@
     JSON.stringify(f1.log));
   t('sm: search url shape', f1.log[0] === 'https://www.scalemates.com/search.php?fkSECTION%5B%5D=Kits&q=Roden%20434', f1.log[0]);
   t('sm: era and topic stored for search', sm1.era === 'World War I' && sm1.topicPath === 'Aircraft Propeller');
+  t('sm: topic url stored on the match', sm1.topicUrl === 'https://www.scalemates.com/topics/topic.php?id=2660', sm1.topicUrl);
   t('sm: kit-page operators merged into the match',
     sm1.operators === 'Deutsche Luftstreitkräfte; Imperial German Air Force', sm1.operators);
   t('sm: kit-page campaigns merged, deduplicated',

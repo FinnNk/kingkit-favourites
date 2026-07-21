@@ -378,6 +378,19 @@ body.view-list .list { grid-template-columns: 1fr; gap: 8px; }
 .fav__status.is-bought { color: var(--info); border-color: var(--info); font-weight: 600; }
 .fav__status.is-built { color: var(--ok); border-color: var(--ok); font-weight: 600; }
 
+/* "Find more like this" row: two link-buttons, toggled like the note editor. */
+.fav__more { display: flex; gap: 5px; padding-top: 6px; }
+.fav__more .btn {
+  flex: 1 1 0;
+  text-align: center;
+  text-decoration: none;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fav__more .btn:hover { color: var(--accent); }
+
 .fav__note-edit { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 6px; }
 .fav__note-edit input { flex: 1 1 100%; min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit; font: inherit; font-size: 12px; }
 .fav__note-edit .js-note-save { margin-left: auto; }

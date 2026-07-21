@@ -96,6 +96,8 @@
       [VOCAB_KEY]: {
         brands: vocab.brands || [],
         categories: vocab.categories || [],
+        brandIds: vocab.brandIds || {},     // lowercased name -> Kit Finder id
+        categoryIds: vocab.categoryIds || {},
         fetchedAt: Date.now()
       }
     });
@@ -103,6 +105,8 @@
 
   function vocabIsStale(vocab) {
     if (!vocab || !vocab.brands || !vocab.brands.length) return true;
+    // Pre-deep-link vocabularies lack the id maps; refresh them promptly.
+    if (!vocab.brandIds || !Object.keys(vocab.brandIds).length) return true;
     return (Date.now() - (vocab.fetchedAt || 0)) > VOCAB_TTL;
   }
 

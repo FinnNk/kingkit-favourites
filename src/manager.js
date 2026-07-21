@@ -250,6 +250,44 @@
     return sim === undefined ? -1 : sim;
   }
 
+  /* ------------------------------------------------- find more like this */
+
+  /**
+   * A pre-filled Kit Finder search for this kit's manufacturer and scale.
+   * Kit Finder keys brands by numeric id (harvested into the vocabulary with
+   * the names) and writes scales with a caret ("1^48"); when the id is
+   * unknown — vocabulary not refreshed yet, or an odd brand — fall back to a
+   * plain text search on the subject.
+   */
+  function kingkitMoreUrl(fav) {
+    var f = facetsOf(fav);
+    var brandIds = (state.vocab && state.vocab.brandIds) || {};
+    var brandId = f.brand ? brandIds[f.brand.toLowerCase()] : '';
+    if (brandId) {
+      return 'https://www.kingkit.co.uk/shop.php?search=kitfinder&search_term=' +
+        '&brand=' + encodeURIComponent(brandId) + '&cat=' +
+        '&scale=' + encodeURIComponent((f.scale || '').replace('/', '^'));
+    }
+    var subject = (typeof KKSM !== 'undefined' && KKSM.parseTitle(fav).subject) || fav.title || '';
+    return 'https://www.kingkit.co.uk/shop.php?search=text&search_term=' +
+      encodeURIComponent(subject.split(/\s+/).slice(0, 4).join(' '));
+  }
+
+  /**
+   * The Scalemates topic page lists every kit of this subject across all
+   * brands and boxings — the ideal "more like this" for subject hunting.
+   * Favourites matched before topic URLs were captured fall back to a
+   * Scalemates search on the subject (a human click, not an automated one).
+   */
+  function scalematesMoreUrl(fav) {
+    var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : null;
+    if (sm && sm.topicUrl) return sm.topicUrl;
+    var subject = (sm && sm.subject) ||
+      (typeof KKSM !== 'undefined' && KKSM.parseTitle(fav).subject) || fav.title || '';
+    return 'https://www.scalemates.com/search.php?fkSECTION%5B%5D=Kits&q=' +
+      encodeURIComponent(subject);
+  }
+
   /**
    * DevTools-only visibility into the two search tiers (the UI deliberately
    * does not distinguish them). Logged at debug level — enable "Verbose" in
@@ -576,6 +614,14 @@
 
     node.querySelector('.js-note-input').value = fav.note || '';
     node.querySelector('.js-sm-input').value = (fav.sm && fav.sm.url) || '';
+
+    var moreKk = node.querySelector('.js-more-kingkit');
+    moreKk.href = kingkitMoreUrl(fav);
+    moreKk.title = 'Search KingKit for ' +
+      ([f.brand, f.scale].filter(Boolean).join(' ') || 'similar kits');
+    var moreSm = node.querySelector('.js-more-scalemates');
+    moreSm.href = scalematesMoreUrl(fav);
+    moreSm.title = 'Every boxing of this subject on Scalemates';
     return node;
   }
 
@@ -701,6 +747,13 @@
     var card = event.target.closest('.fav');
     if (!card) return;
     var id = card.dataset.id;
+
+    if (event.target.closest('.js-more')) {
+      var moreRow = card.querySelector('.fav__more');
+      moreRow.hidden = !moreRow.hidden;
+      event.target.closest('.js-more').setAttribute('aria-expanded', String(!moreRow.hidden));
+      return;
+    }
 
     if (event.target.closest('.js-alert-seen')) {
       // One click marks every alert on this favourite as read; the chip

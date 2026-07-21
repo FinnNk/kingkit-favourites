@@ -196,6 +196,40 @@
   await waitFor(() => cardIds().length === 5, 'facet clear still works');
   t('facet clear still resets everything', $('#f-brand').value === '' && cardIds().length === 5);
 
+  /* ------------------------------------------- find more like this */
+
+  const moreBtn = card(RODEN).querySelector('.js-more');
+  t('more-like-this button renders on cards', !!moreBtn);
+  t('more row starts hidden', card(RODEN).querySelector('.fav__more').hidden === true);
+  moreBtn.click();
+  t('more button reveals the links row',
+    await waitFor(() => card(RODEN).querySelector('.fav__more').hidden === false, 'more row visible'));
+  t('more button reports expanded state',
+    card(RODEN).querySelector('.js-more').getAttribute('aria-expanded') === 'true');
+
+  const kkHref = card(RODEN).querySelector('.js-more-kingkit').href;
+  t('KingKit link is a pre-filled Kit Finder search (brand id + caret scale)',
+    kkHref.indexOf('search=kitfinder') !== -1 && kkHref.indexOf('brand=412') !== -1 &&
+    (kkHref.indexOf('scale=1%5E48') !== -1 || kkHref.indexOf('scale=1^48') !== -1), kkHref);
+  const smHref = card(RODEN).querySelector('.js-more-scalemates').href;
+  t('Scalemates link uses the topic page when known',
+    smHref === 'https://www.scalemates.com/topics/topic.php?id=2660', smHref);
+  t('more links open in a new tab',
+    card(RODEN).querySelector('.js-more-kingkit').target === '_blank');
+
+  const smFallback = card(EDUARD).querySelector('.js-more-scalemates').href;
+  t('Scalemates link falls back to a subject search without a topic url',
+    smFallback.indexOf('search.php') !== -1 && smFallback.indexOf('Hawker%20Tempest') !== -1, smFallback);
+
+  const kkFallback = card(TAKOM).querySelector('.js-more-kingkit').href;
+  t('KingKit link falls back to a subject text search for an id-less brand',
+    kkFallback.indexOf('search=text') !== -1 &&
+    kkFallback.indexOf('JAPANESE%20NAVY%20BATTLESHIP%20YAMATO') !== -1, kkFallback);
+
+  card(RODEN).querySelector('.js-more').click();
+  t('more button toggles the row closed again',
+    await waitFor(() => card(RODEN).querySelector('.fav__more').hidden === true, 'more row hidden'));
+
   /* ---------------------------------------------------------- report */
 
   const passed = out.filter(line => line.startsWith('[PASS]')).length;

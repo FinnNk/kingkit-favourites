@@ -4,8 +4,11 @@
   "version": "1.0.0",
   "description": "Save KingKit products for later with a one-click heart on every product image, then browse and manage them in one list.",
   "minimum_chrome_version": "102",
-  "permissions": ["storage"],
-  "host_permissions": ["*://*.kingkit.co.uk/*"],
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "*://*.kingkit.co.uk/*",
+    "*://*.scalemates.com/*"
+  ],
   "action": {
     "default_title": "KingKit Favourites",
     "default_popup": "src/manager.html",

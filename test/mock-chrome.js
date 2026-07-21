@@ -43,7 +43,22 @@
       removeListener(fn) { listeners = listeners.filter(f => f !== fn); }
     }
   };
-  window.chrome.runtime = { getURL: p => './' + p.replace(/^src\//, ''), lastError: null };
+  window.chrome.runtime = {
+    getURL: p => './' + p.replace(/^src\//, ''),
+    lastError: null,
+    // Simulates the worker's manual-link handler when the engine + fixtures
+    // are loaded on the page (manager tests).
+    sendMessage(msg, cb) {
+      window.__lastMessage = msg;
+      if (msg && msg.type === 'kkf:linkScalemates' && window.KKSM && window.SM_FIXTURES) {
+        const cand = window.KKSM.parseKitPage(window.SM_FIXTURES.KIT_PAGE_RODEN_434, msg.url);
+        const sm = Object.assign({ status: 'matched', at: Date.now(), manual: true }, cand);
+        window.KKFav.update(msg.id, { sm }).then(() => cb && cb({ ok: true, sm }));
+        return;
+      }
+      cb && cb({ ok: false, error: 'no handler' });
+    }
+  };
   window.chrome.tabs = { create: o => { window.__lastTabCreate = o; } };
 
   // Stub the two same-origin requests the content script makes: the brand list

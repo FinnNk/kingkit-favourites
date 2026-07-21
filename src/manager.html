@@ -68,7 +68,10 @@
         <div class="fav__foot">
           <time class="fav__added"></time>
           <div class="fav__actions">
-            <button type="button" class="icon-btn icon-btn--sm js-note" title="Add or edit a note" aria-label="Add or edit a note">
+            <a class="icon-btn icon-btn--sm fav__sm-link js-sm-link" target="_blank" rel="noopener" title="View on Scalemates" aria-label="View on Scalemates" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7"/></svg>
+            </a>
+            <button type="button" class="icon-btn icon-btn--sm js-note" title="Edit note and Scalemates link" aria-label="Edit note and Scalemates link">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16Z"/></svg>
             </button>
             <button type="button" class="icon-btn icon-btn--sm icon-btn--danger js-remove" title="Remove from favourites" aria-label="Remove from favourites">
@@ -78,6 +81,7 @@
         </div>
         <div class="fav__note-edit" hidden>
           <input type="text" class="js-note-input" placeholder="e.g. wanted for the 1/48 build" maxlength="240">
+          <input type="url" class="js-sm-input" placeholder="Scalemates kit URL (optional)">
           <button type="button" class="btn btn--sm js-note-save">Save</button>
         </div>
       </div>
@@ -98,6 +102,9 @@
           <option value="sync">Synced to my Chrome account</option>
           <option value="local">This device only</option>
         </select>
+      </label>
+      <label class="storage" title="Look new favourites up on scalemates.com to add release year and subject details">
+        <input type="checkbox" id="sm-enabled"> Scalemates
       </label>
       <span class="meter" id="usage"></span>
     </div>

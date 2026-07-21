@@ -304,8 +304,12 @@ body.view-list .list { grid-template-columns: 1fr; gap: 8px; }
 
 .fav__actions { display: flex; gap: 4px; }
 
-.fav__note-edit { display: flex; gap: 5px; padding-top: 6px; }
-.fav__note-edit input { flex: 1 1 auto; min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit; font: inherit; font-size: 12px; }
+.fav__note-edit { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 6px; }
+.fav__note-edit input { flex: 1 1 100%; min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit; font: inherit; font-size: 12px; }
+.fav__note-edit .js-note-save { margin-left: auto; }
+
+.fav__sm-link { color: var(--muted); text-decoration: none; }
+.fav__sm-link:hover { color: #2563eb; border-color: #2563eb; }
 
 /* Row layout */
 body.view-list .fav { flex-direction: row; }

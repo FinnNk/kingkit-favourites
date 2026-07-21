@@ -169,6 +169,105 @@
   t('facets fall back to the title with no vocabulary',
     KKFav.facetsFor({ title: 'AIRFIX 1/72 08022 JUNKERS' }, null).brand === 'Airfix');
 
+  /* ================= Scalemates engine (KKSM) ================= */
+  const FX = window.SM_FIXTURES;
+
+  // 17. KingKit title parsing
+  const p1 = KKSM.parseTitle({ title: 'RODEN 1/48 434 JUNKERS D.I (SHORT FUSELAGE)', brand: 'Roden' });
+  t('sm: title parses brand/scale/number/subject',
+    p1.brand === 'Roden' && p1.scale === '1/48' && p1.number === '434' && /JUNKERS D\.I/.test(p1.subject),
+    JSON.stringify(p1));
+  const p2 = KKSM.parseTitle({ title: 'SPECIAL HOBBY 1/48 SH48206 REGGIANE RE.2005', brand: 'Special Hobby' });
+  t('sm: prefixed catalogue number parsed', p2.number === 'SH48206', p2.number);
+  const p3 = KKSM.parseTitle({ title: 'TAKOM 1/16 01013 YAMATO ANCHORS - SPECIAL OFFER PRICE', brand: 'Takom' });
+  t('sm: sale suffix stripped before parsing', p3.subject === 'YAMATO ANCHORS', p3.subject);
+
+  // 18. search result parsing (real captured HTML)
+  const roden = KKSM.parseSearchHtml(FX.SEARCH_RODEN_434);
+  t('sm: parses the roden result', roden.length === 1, String(roden.length));
+  t('sm: extracts url/year/brand/number',
+    roden[0].url === 'https://www.scalemates.com/kits/roden-434-junkers-di--122091' &&
+    roden[0].year === '2007' && roden[0].brand === 'Roden' && roden[0].number === '434',
+    JSON.stringify(roden[0]));
+  t('sm: extracts era and variant', roden[0].era === 'World War I' && roden[0].variant === 'short-fuselage version');
+  t('sm: topic header captured for semantic search',
+    roden[0].topic && roden[0].topic.name === 'Junkers D.I' && roden[0].topic.alt === 'Junkers J 9' &&
+    roden[0].topic.path === 'Aircraft Propeller', JSON.stringify(roden[0].topic));
+
+  const sh = KKSM.parseSearchHtml(FX.SEARCH_SH_48206);
+  t('sm: parses multiple boxings', sh.length === 2 && sh[0].year === '2021' && sh[1].year === '2020');
+  t('sm: empty results parse to empty list', KKSM.parseSearchHtml(FX.SEARCH_EMPTY).length === 0);
+
+  // 19. scoring and match choice
+  const chosen = KKSM.chooseMatch(p1, roden);
+  t('sm: exact match accepted with number+brand', !!chosen && chosen.s.numberHit && chosen.s.brandHit);
+
+  const shChoice = KKSM.chooseMatch(p2, sh);
+  t('sm: rebox tie broken by earliest year', shChoice && shChoice.cand.year === '2020', shChoice && shChoice.cand.year);
+  t('sm: number normalisation matches SH48206 to 48206',
+    !!KKSM.chooseMatch(KKSM.parseTitle({ title: 'SPECIAL HOBBY 1/48 48206 REGGIANE RE.2005', brand: 'Special Hobby' }), sh));
+
+  const mixed = KKSM.parseSearchHtml(FX.SEARCH_MIXED_BRANDS);
+  const academyPick = KKSM.chooseMatch(
+    KKSM.parseTitle({ title: 'ACADEMY 1/48 2159 P-47D THUNDERBOLT', brand: 'Academy' }), mixed);
+  t('sm: wrong-brand candidate (Eduard etch) rejected in favour of Academy',
+    academyPick && /academy-2159/.test(academyPick.cand.url), academyPick && academyPick.cand.url);
+  t('sm: subject-only similarity without brand agreement is rejected',
+    KKSM.chooseMatch(KKSM.parseTitle({ title: 'HOBBYCRAFT 1/48 999 P-47D THUNDERBOLT' }), mixed) === null);
+
+  // 20. query ladder
+  const q1 = KKSM.buildQueries(p1);
+  t('sm: primary query is brand + number', q1[0] === 'Roden 434', q1[0]);
+  t('sm: fallback query is brand + subject words', /^Roden JUNKERS/.test(q1[1]), q1[1]);
+
+  // 21. lookup flow with a stubbed fetch — no network
+  const stub = bodyByCall => {
+    let call = 0;
+    const log = [];
+    const fn = async url => {
+      log.push(url);
+      const body = bodyByCall[Math.min(call++, bodyByCall.length - 1)];
+      if (body === 403) return { ok: false, status: 403, text: async () => '' };
+      return { ok: true, status: 200, text: async () => body };
+    };
+    fn.log = log;
+    return fn;
+  };
+
+  const favR = { title: 'RODEN 1/48 434 JUNKERS D.I (SHORT FUSELAGE)', brand: 'Roden', scale: '1/48' };
+  const f1 = stub([FX.SEARCH_RODEN_434]);
+  const sm1 = await KKSM.lookup(favR, f1, null);
+  t('sm: lookup matches on the first query', sm1.status === 'matched' && sm1.year === '2007' && sm1.url.includes('122091'),
+    JSON.stringify(sm1));
+  t('sm: one request sufficed', f1.log.length === 1, String(f1.log.length));
+  t('sm: search url shape', f1.log[0] === 'https://www.scalemates.com/search.php?fkSECTION%5B%5D=Kits&q=Roden%20434', f1.log[0]);
+  t('sm: era and topic stored for search', sm1.era === 'World War I' && sm1.topicPath === 'Aircraft Propeller');
+
+  const f2 = stub([FX.SEARCH_EMPTY, FX.SEARCH_RODEN_434]);
+  const sm2 = await KKSM.lookup(favR, f2, null);
+  t('sm: ladder falls through to the subject query', sm2.status === 'matched' && f2.log.length === 2);
+
+  const f3 = stub([FX.SEARCH_EMPTY, FX.SEARCH_EMPTY]);
+  const sm3 = await KKSM.lookup({ title: 'TAKOM 1/16 01013 YAMATO ANCHORS', brand: 'Takom' }, f3, null);
+  t('sm: exhausted ladder yields permanent nomatch', sm3.status === 'nomatch');
+  t('sm: nomatch is never retried', KKSM.needsLookup({ title: 'x', sm: sm3 }) === false);
+  t('sm: matched is never retried', KKSM.needsLookup({ title: 'x', sm: sm1 }) === false);
+  t('sm: missing sm means lookup needed', KKSM.needsLookup({ title: 'x' }) === true);
+
+  const f4 = stub([403]);
+  const sm4 = await KKSM.lookup(favR, f4, null);
+  t('sm: 403 pauses the queue', sm4.status === 'error' && sm4.pauseQueue === true);
+  t('sm: fresh error is not retried immediately', KKSM.needsLookup({ title: 'x', sm: sm4 }) === false);
+  t('sm: stale error is retried', KKSM.needsLookup({ title: 'x', sm: Object.assign({}, sm4, { at: Date.now() - 16 * 60 * 1000 }) }) === true);
+  t('sm: retries are capped', KKSM.needsLookup({ title: 'x', sm: { status: 'error', tries: 3, at: 0 } }) === false);
+
+  // 22. kit page parsing (manual link)
+  const kit = KKSM.parseKitPage(FX.KIT_PAGE_RODEN_434, 'https://www.scalemates.com/kits/roden-434-junkers-di--122091?utm=x');
+  t('sm: kit page yields year/brand/number/scale/ean',
+    kit.year === '2007' && kit.brand === 'Roden' && kit.number === '434' && kit.scale === '1:48' && kit.ean === '4823017700963',
+    JSON.stringify(kit));
+  t('sm: kit page url stripped of query', kit.url === 'https://www.scalemates.com/kits/roden-434-junkers-di--122091');
+
   const failures = out.filter(l => l.startsWith('[FAIL]'));
   document.getElementById('results').innerHTML =
     out.map(l => `<div class="${l.startsWith('[PASS]') ? 'ok' : 'fail'}">${l.replace(/</g, '&lt;')}</div>`).join('') +

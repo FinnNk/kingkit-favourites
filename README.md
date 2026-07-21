@@ -32,7 +32,10 @@ signed into with the same Google account.
   them. Each option shows how many kits it holds, and choosing one narrows the
   others: pick *Special Hobby* and the scale list collapses to just the scales
   they appear in.
-- **Search** across titles, manufacturers, scales, categories and your own notes.
+- **Search** across titles, manufacturers, scales, categories, your own notes — and, once a kit is linked to
+  Scalemates, its subject, era, topic and release year. The search understands common equivalences: "ww1",
+  "great war" and "world war i" all find a kit whose era is *World War I* (without also matching *World War
+  II*), and "planes" matches anything under the *Aircraft* topic.
 - **Sort** by newest, oldest, title, or price (low–high / high–low).
 - **Notes** — add a private reminder to any kit ("wanted for the winter build", "check postage").
 - **Remove** individual items, or clear the whole list — both undoable.
@@ -40,6 +43,33 @@ signed into with the same Google account.
 - **Export / import** the list as JSON, for backups or moving between machines.
 - **A badge** on the toolbar icon showing how many kits you have saved.
 - **Dark mode**, following your system theme.
+
+## Scalemates enrichment
+
+KingKit's listings are sparse, so when you favourite a kit the extension looks it up on
+[scalemates.com](https://www.scalemates.com) in the background and, when it finds a confident match, stores the
+kit's release year, subject, variant, era and topic. The year appears on the card
+(*Roden · 1/48 · Aircraft Model Kits · 2007*) and a small link icon opens the Scalemates page; the other fields
+feed the search box.
+
+Matching is deliberately cautious — a wrong link is worse than none. The KingKit title is parsed into
+manufacturer, catalogue number, scale and subject; Scalemates is searched by manufacturer + number first, then
+manufacturer + subject; and a candidate is only accepted when the catalogue number *and* manufacturer agree
+(numbers are compared ignoring prefixes, so KingKit's "48206" matches Scalemates' "SH48206"), or when
+manufacturer, scale and a strong subject similarity all line up. Where one catalogue number has several boxings,
+the earliest release of that boxing wins. Anything weaker is left unmatched: open the card's edit (pencil) view
+and paste a Scalemates kit URL to link it yourself — the year and details are fetched from that page.
+
+The lookups are built to be a considerate guest on Scalemates:
+
+- a favourite is looked up **at most twice, ever** (two query wordings); matches *and* misses are stored
+  permanently, so nothing is re-fetched;
+- lookups run one at a time with a several-second gap, and are triggered only by you favouriting something —
+  nothing speculative, no bulk crawling;
+- if Scalemates responds with 403/429, all lookups pause for an hour;
+- the whole feature can be switched off with the **Scalemates** tick-box in the footer.
+
+Please leave the volume low (a handful of kits at a time) — that is what this design assumes.
 
 ## Syncing across computers
 
@@ -78,11 +108,13 @@ extension and safe to dismiss.
 | Permission | Why |
 | --- | --- |
 | `storage` | To save your favourites and preferences. |
-| `*://*.kingkit.co.uk/*` | To add the heart overlay to KingKit pages. The extension does not run on any other site. |
+| `alarms` | To resume an interrupted Scalemates lookup queue. |
+| `*://*.kingkit.co.uk/*` | To add the heart overlay to KingKit pages. |
+| `*://*.scalemates.com/*` | To look favourited kits up for release year and subject details. |
 
-There are no network requests, no analytics, and no remote code. The only external content the extension loads
-is the product thumbnails, fetched from kingkit.co.uk to display in your list; if one fails to load, a
-placeholder is shown instead.
+There are no analytics and no remote code. The extension talks to exactly two sites: kingkit.co.uk (the overlay,
+thumbnails, and the category fetched after a save) and scalemates.com (the enrichment described above, which can
+be switched off).
 
 ## Project layout
 
@@ -91,9 +123,11 @@ manifest.json         Manifest V3 definition
 src/storage.js        Shared favourites store (content script, worker and manager all use it)
 src/content.js        Injects the heart overlay and reads product details off the page
 src/content.css       Overlay and toast styling
-src/background.js     Service worker — keeps the toolbar badge count up to date
+src/scalemates.js     Scalemates lookup engine: title parsing, search parsing, match scoring
+src/background.js     Service worker — badge count and the polite Scalemates lookup queue
 src/manager.html/.css/.js   The favourites list, used as both popup and full-tab page
 test/harness.html     Offline test harness (see below)
+test/sm-fixtures.js   Scalemates HTML fixtures captured from real responses
 tools/make-icons.ps1  Regenerates the PNG icons
 ```
 
@@ -164,3 +198,8 @@ the Storage dropdown to "This device only".
 
 **Thumbnails are blank.** The kit is still saved and the title links to the product; only the image failed to
 load from kingkit.co.uk.
+
+**A kit has no Scalemates link or year.** Either the lookup found no confident match (accessories and rare kits
+often aren't on Scalemates), or lookups are switched off, or the queue is in its post-throttle pause. To link it
+by hand: pencil icon → paste the Scalemates kit URL → Save. Pasting a different URL replaces a wrong link;
+clearing the field removes it and lets the automatic lookup try again.

@@ -96,12 +96,83 @@
     return state.facets.get(fav.id) || {};
   }
 
+  /**
+   * Semantic-ish search. Each group is a set of terms treated as equivalent,
+   * so "ww1", "biplane era" kits tagged by Scalemates as "World War I", and a
+   * search for "planes" against the "Aircraft" topic all connect. Multi-word
+   * variants are matched with token boundaries so "world war i" cannot hit
+   * "world war ii".
+   */
+  var SYNONYMS = [
+    ['ww1', 'wwi', 'ww 1', 'world war 1', 'world war i', 'great war', 'first world war'],
+    ['ww2', 'wwii', 'ww 2', 'world war 2', 'world war ii', 'second world war'],
+    ['cold war', 'coldwar'],
+    ['aircraft', 'plane', 'planes', 'aeroplane', 'airplane', 'aviation', 'fighter', 'bomber'],
+    ['ship', 'ships', 'boat', 'boats', 'naval', 'navy', 'warship', 'battleship'],
+    ['tank', 'tanks', 'armour', 'armor', 'afv', 'military'],
+    ['car', 'cars', 'automotive', 'automobile'],
+    ['motorbike', 'motorcycle', 'bike'],
+    ['figure', 'figures', 'figurine'],
+    ['helicopter', 'chopper', 'rotorcraft'],
+    ['german', 'germany', 'luftwaffe', 'wehrmacht'],
+    ['british', 'britain', 'raf', 'royal air force', 'uk'],
+    ['american', 'usa', 'usaf', 'us navy', 'usn'],
+    ['japanese', 'japan', 'ijn', 'ija'],
+    ['soviet', 'russian', 'russia', 'ussr']
+  ];
+
+  function expansionsFor(term) {
+    var out = [term];
+    SYNONYMS.forEach(function (group) {
+      if (group.indexOf(term) !== -1) {
+        group.forEach(function (variant) {
+          if (variant !== term) out.push(variant);
+        });
+      }
+    });
+    return out;
+  }
+
+  function haystackOf(fav) {
+    var f = facetsOf(fav);
+    var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : null;
+    return ' ' + [
+      fav.title, fav.details, fav.note, fav.url, f.brand, f.scale, f.category,
+      sm && sm.subject, sm && sm.variant, sm && sm.era, sm && sm.year,
+      sm && sm.topicName, sm && sm.topicAlt, sm && sm.topicPath, sm && sm.topicYear,
+      sm && sm.ean
+    ].filter(Boolean).join(' ').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  }
+
+  /** Collapse multi-word synonym phrases ("great war") into their group's
+      single-token representative, so splitting on spaces cannot break them. */
+  function foldPhrases(query) {
+    var q = ' ' + query + ' ';
+    SYNONYMS.forEach(function (group) {
+      var token = group.find(function (v) { return v.indexOf(' ') === -1; }) || group[0];
+      group.forEach(function (variant) {
+        if (variant.indexOf(' ') === -1) return;
+        var at = q.indexOf(' ' + variant + ' ');
+        if (at !== -1) q = q.split(' ' + variant + ' ').join(' ' + token + ' ');
+      });
+    });
+    return q.trim();
+  }
+
   function matches(fav, query) {
     if (!query) return true;
-    var f = facetsOf(fav);
-    var haystack = [fav.title, fav.details, fav.note, fav.url, f.brand, f.scale, f.category]
-      .filter(Boolean).join(' ').toLowerCase();
-    return query.split(/\s+/).every(function (term) { return haystack.indexOf(term) !== -1; });
+    var haystack = haystackOf(fav);
+    // Every search term must match; a term matches if any of its synonym
+    // variants occurs. Single words match as substrings (so "junker" finds
+    // Junkers); multi-word variants require token boundaries.
+    return foldPhrases(query.replace(/[^a-z0-9\s]/gi, ' ')).split(/\s+/).filter(Boolean)
+      .every(function (term) {
+        return expansionsFor(term).some(function (variant) {
+          return variant.indexOf(' ') === -1
+            ? haystack.indexOf(variant) !== -1
+            : haystack.indexOf(' ' + variant + ' ') !== -1;
+        });
+      });
   }
 
   /**
@@ -245,9 +316,18 @@
     }
 
     var f = facetsOf(fav);
+    var sm = fav.sm && fav.sm.status === 'matched' ? fav.sm : null;
     var details = node.querySelector('.fav__details');
-    var line = [f.brand, f.scale, f.category].filter(Boolean).join(' · ') || fav.details;
+    var line = [f.brand, f.scale, f.category, sm && sm.year]
+      .filter(Boolean).join(' · ') || fav.details;
     if (line) details.textContent = line; else details.hidden = true;
+
+    var smLink = node.querySelector('.js-sm-link');
+    if (sm && sm.url) {
+      smLink.href = sm.url;
+      smLink.hidden = false;
+      smLink.title = 'View on Scalemates' + (sm.year ? ' (released ' + sm.year + ')' : '');
+    }
 
     var prices = node.querySelector('.fav__prices');
     var priceHtml = renderPrices(fav);
@@ -265,6 +345,7 @@
     added.title = 'Saved ' + fullDate(fav.addedAt);
 
     node.querySelector('.js-note-input').value = fav.note || '';
+    node.querySelector('.js-sm-input').value = (fav.sm && fav.sm.url) || '';
     return node;
   }
 
@@ -374,16 +455,43 @@
   });
 
   el.list.addEventListener('keydown', function (event) {
-    if (event.key !== 'Enter' || !event.target.classList.contains('js-note-input')) return;
+    if (event.key !== 'Enter') return;
+    if (!event.target.classList.contains('js-note-input') &&
+        !event.target.classList.contains('js-sm-input')) return;
     var card = event.target.closest('.fav');
     saveNote(card, card.dataset.id);
   });
 
   function saveNote(card, id) {
-    var value = card.querySelector('.js-note-input').value.trim();
-    store.update(id, { note: value }).then(function () {
-      card.querySelector('.fav__note-edit').hidden = true;
-      toast(value ? 'Note saved' : 'Note cleared');
+    var note = card.querySelector('.js-note-input').value.trim();
+    var smUrl = card.querySelector('.js-sm-input').value.trim();
+    var fav = state.favourites.find(function (x) { return x.id === id; });
+    var currentUrl = (fav && fav.sm && fav.sm.url) || '';
+
+    var work = store.update(id, { note: note });
+
+    if (smUrl && smUrl !== currentUrl) {
+      // A pasted kit link: the worker fetches that one page for its details.
+      work = work.then(function () {
+        return new Promise(function (resolve) {
+          chrome.runtime.sendMessage({ type: 'kkf:linkScalemates', id: id, url: smUrl }, resolve);
+        });
+      }).then(function (reply) {
+        toast(reply && reply.ok
+          ? 'Linked to Scalemates' + (reply.sm && reply.sm.year ? ' (' + reply.sm.year + ')' : '')
+          : 'Could not link: ' + ((reply && reply.error) || 'no reply'));
+      });
+    } else if (!smUrl && currentUrl) {
+      // Cleared: forget the link (and let automatic lookup have another go).
+      work = work.then(function () { return store.update(id, { sm: null }); })
+        .then(function () { toast('Scalemates link removed'); });
+    } else {
+      work = work.then(function () { toast(note ? 'Note saved' : 'Saved'); });
+    }
+
+    work.then(function () {
+      var editor = card.querySelector('.fav__note-edit');
+      if (editor) editor.hidden = true;
     });
   }
 
@@ -499,6 +607,11 @@
     el.banner.hidden = true;
   });
 
+  var smEnabled = document.getElementById('sm-enabled');
+  smEnabled.addEventListener('change', function () {
+    store.setSettings({ scalemates: smEnabled.checked });
+  });
+
   store.onChange(load);
 
   /* ----------------------------------------------------------------- boot */
@@ -510,6 +623,7 @@
     state.sort = settings.sort || 'added-desc';
     el.sort.value = state.sort;
     el.area.value = settings.area;
+    smEnabled.checked = settings.scalemates !== false;
     await load();
     el.search.focus();
   })();

@@ -30,7 +30,8 @@
     area: 'sync',        // preferred write target: 'sync' | 'local'
     syncFallback: false, // set when a sync write was rejected and spilled to local
     view: 'grid',        // manager layout: 'grid' | 'list'
-    sort: 'added-desc'
+    sort: 'added-desc',
+    scalemates: true     // background Scalemates lookups on/off
   };
 
   function area(name) {

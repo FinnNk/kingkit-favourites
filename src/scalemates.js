@@ -122,6 +122,8 @@
           name: decodeEntities(m[1]),
           alt: decodeEntities(m[2] || ''),
           path: path.join(' '),
+          // The topic header's flag is the subject's nation (e.g. DR, GB, JP).
+          nation: (tail.match(/flags[^"]*"[^>]*title="([A-Z]{2,3})"/) || [])[1] || '',
           year: (tail.match(/>\s*(\d{4})\s*<\/span>/) || [])[1] || ''
         };
       }
@@ -271,6 +273,7 @@
         sm.topicAlt = cand.topic.alt || '';
         sm.topicPath = cand.topic.path || '';
         sm.topicYear = cand.topic.year || '';
+        sm.topicNation = cand.topic.nation || '';
       }
     }
     return sm;

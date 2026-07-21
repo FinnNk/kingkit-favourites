@@ -46,8 +46,25 @@
     vocab: null,
     query: '',
     sort: 'added-desc',
-    filters: { brand: '', scale: '', category: '' }
+    filters: { brand: '', scale: '', category: '' },
+    // Dense-vector results for the current query: Map id -> cosine sim.
+    semantic: { query: '', sims: new Map() },
+    semanticToken: 0
   };
+
+  // Semantic acceptance, tuned against live all-MiniLM-L6-v2 output. A
+  // favourite joins the semantic tail when its cosine similarity clears an
+  // absolute floor AND sits a clear absolute gap above the collection mean.
+  // The gap (not a z-score) is what rejects "nothing really matches" queries:
+  // there every similarity compresses into a narrow band, so the top item's
+  // gap over the mean collapses even though its z-score can stay high.
+  // With very few vectors the mean is meaningless, so a plain threshold
+  // applies instead.
+  var SEM_FLOOR = 0.28;
+  var SEM_GAP = 0.08;
+  var SEM_SMALL_N = 4;
+  var SEM_PLAIN = 0.35;
+  var SEM_MAX_TAIL = 8;
 
   /* --------------------------------------------------------------- format */
 
@@ -107,10 +124,11 @@
     ['ww1', 'wwi', 'ww 1', 'world war 1', 'world war i', 'great war', 'first world war'],
     ['ww2', 'wwii', 'ww 2', 'world war 2', 'world war ii', 'second world war'],
     ['cold war', 'coldwar'],
-    ['aircraft', 'plane', 'planes', 'aeroplane', 'airplane', 'aviation', 'fighter', 'bomber'],
-    ['ship', 'ships', 'boat', 'boats', 'naval', 'navy', 'warship', 'battleship'],
+    ['aircraft', 'plane', 'planes', 'aeroplane', 'airplane', 'aviation', 'fighter', 'bomber', 'biplane', 'monoplane', 'warplane'],
+    ['ship', 'ships', 'boat', 'boats', 'naval', 'navy', 'warship', 'battleship', 'submarine', 'destroyer'],
     ['tank', 'tanks', 'armour', 'armor', 'afv', 'military'],
     ['car', 'cars', 'automotive', 'automobile'],
+    ['truck', 'lorry', 'lorries', 'trucks'],
     ['motorbike', 'motorcycle', 'bike'],
     ['figure', 'figures', 'figurine'],
     ['helicopter', 'chopper', 'rotorcraft'],
@@ -173,6 +191,68 @@
             : haystack.indexOf(' ' + variant + ' ') !== -1;
         });
       });
+  }
+
+  /**
+   * How well a rules-based match fits the query — used to order the rules
+   * tier while a search is active. Title hits count most, the whole phrase
+   * appearing in the title most of all.
+   */
+  function relevancy(fav, query) {
+    var title = String(fav.title || '').toLowerCase();
+    var haystack = haystackOf(fav);
+    var score = 0;
+    if (query.length > 2 && title.indexOf(query) !== -1) score += 10;
+    foldPhrases(query.replace(/[^a-z0-9\s]/gi, ' ')).split(/\s+/).filter(Boolean)
+      .forEach(function (term) {
+        if (title.indexOf(term) !== -1) score += 3;
+        else if (haystack.indexOf(term) !== -1) score += 1;
+        else score += 0.5; // matched via a synonym variant only
+      });
+    return score;
+  }
+
+  /** Semantic similarity for the current query, or -1 when not computed. */
+  function semanticSim(fav) {
+    if (state.semantic.query !== state.query.trim().toLowerCase()) return -1;
+    var sim = state.semantic.sims.get(fav.id);
+    return sim === undefined ? -1 : sim;
+  }
+
+  /** Ids passing the floor + z-score acceptance for the current query. */
+  function acceptedSemanticIds() {
+    if (state.semantic.query !== state.query.trim().toLowerCase()) return new Set();
+    var sims = state.semantic.sims;
+    var accepted = new Set();
+    if (!sims.size) return accepted;
+
+    if (sims.size < SEM_SMALL_N) {
+      sims.forEach(function (sim, id) { if (sim >= SEM_PLAIN) accepted.add(id); });
+      return accepted;
+    }
+
+    var values = Array.from(sims.values());
+    var mean = values.reduce(function (a, b) { return a + b; }, 0) / values.length;
+
+    sims.forEach(function (sim, id) {
+      if (sim >= SEM_FLOOR && sim - mean >= SEM_GAP) accepted.add(id);
+    });
+    return accepted;
+  }
+
+  /**
+   * Kick off the dense-vector search for the current query; when it lands
+   * (and the query has not moved on), re-render with the semantic tail.
+   */
+  function scheduleSemantic(query) {
+    if (!query || typeof KKSem === 'undefined') return;
+    if (state.semantic.query === query) return; // already computed or in flight
+    var token = ++state.semanticToken;
+    KKSem.search(query).then(function (sims) {
+      if (token !== state.semanticToken) return; // superseded
+      state.semantic = { query: query, sims: sims };
+      render();
+    }).catch(function () { /* rules-based results already shown */ });
   }
 
   /**
@@ -351,13 +431,32 @@
 
   function render() {
     var query = state.query.trim().toLowerCase();
-    var searched = state.favourites.filter(function (f) { return matches(f, query); });
+
+    // Tier 1: rules-based matches (substring + synonyms), ranked by relevancy.
+    // Tier 2: dense-vector matches above the threshold, ranked by similarity.
+    // Both tiers respect the facet filters; the UI does not distinguish them.
+    var rules = state.favourites.filter(function (f) { return matches(f, query); });
+    var searched = rules;
+
+    if (query) {
+      scheduleSemantic(query);
+      var inRules = new Set(rules.map(function (f) { return f.id; }));
+      var accepted = acceptedSemanticIds();
+      var tail = state.favourites.filter(function (f) {
+        return !inRules.has(f.id) && accepted.has(f.id);
+      }).sort(function (a, b) { return semanticSim(b) - semanticSim(a); })
+        .slice(0, SEM_MAX_TAIL);
+
+      rules = rules.slice().sort(function (a, b) {
+        return relevancy(b, query) - relevancy(a, query);
+      });
+      searched = rules.concat(tail);
+    }
+
     renderFilters(searched);
 
-    var visible = sortFavourites(
-      searched.filter(function (f) { return passesFilters(f, null); }),
-      state.sort
-    );
+    var visible = searched.filter(function (f) { return passesFilters(f, null); });
+    if (!query) visible = sortFavourites(visible, state.sort);
 
     el.list.textContent = '';
     if (!visible.length) {
@@ -382,8 +481,25 @@
     state.favourites.forEach(function (fav) {
       state.facets.set(fav.id, store.facetsFor(fav, state.vocab));
     });
+    state.semantic = { query: '', sims: new Map() }; // data changed; recompute
     render();
     updateUsage();
+    scheduleEmbedding();
+  }
+
+  /**
+   * Keep favourite vectors warm in the background: waits for the UI to
+   * settle, then embeds anything new or changed, a bounded batch at a time.
+   */
+  var embedTimer = null;
+  function scheduleEmbedding() {
+    if (typeof KKSem === 'undefined') return;
+    clearTimeout(embedTimer);
+    embedTimer = setTimeout(function () {
+      KKSem.ensureVectors(state.favourites, facetsOf, 25).then(function (done) {
+        if (done > 0) scheduleEmbedding(); // keep draining the backlog
+      }).catch(function () { /* semantic layer is best-effort */ });
+    }, 400);
   }
 
   async function updateUsage() {
@@ -561,26 +677,52 @@
     el.importFile.value = '';
   });
 
-  // Two-step confirmation — a native confirm() can dismiss the popup.
-  var clearTimer = null;
+  // Two-step confirmation with an arming delay — a native confirm() can
+  // dismiss the popup, and an instant second step would make an accidental
+  // double click destructive. The first click starts a red sweep across the
+  // button; clicks during the sweep are ignored, and only once the button is
+  // fully red does a click actually clear.
+  var CLEAR_ARM_MS = 850;    // matches the background-size transition
+  var CLEAR_RESET_MS = 4000; // armed window before falling back to idle
+  var clearState = 'idle';   // 'idle' | 'arming' | 'armed'
+  var clearArmTimer = null;
+  var clearResetTimer = null;
+
   el.clearBtn.addEventListener('click', async function () {
-    if (!el.clearBtn.classList.contains('is-confirming')) {
+    if (clearState === 'arming') return; // the accidental double click
+
+    if (clearState === 'idle') {
+      clearState = 'arming';
+      el.clearBtn.textContent = 'Confirm clear';
       el.clearBtn.classList.add('is-confirming');
-      el.clearBtn.textContent = 'Tap again to confirm';
-      clearTimer = setTimeout(resetClear, 4000);
+      // Force a reflow so the 0%-width fill is committed before the sweep
+      // class lands — otherwise the transition can start from the end state.
+      // (A reflow, not requestAnimationFrame: rAF never fires in a hidden
+      // document, and correctness must not depend on rendering.)
+      void el.clearBtn.offsetWidth;
+      el.clearBtn.classList.add('is-arming');
+      clearArmTimer = setTimeout(function () {
+        clearState = 'armed';
+        el.clearBtn.classList.add('is-armed');
+        clearResetTimer = setTimeout(resetClear, CLEAR_RESET_MS);
+      }, CLEAR_ARM_MS);
       return;
     }
-    clearTimeout(clearTimer);
+
+    // Armed: this click is the confirmation.
     var backup = state.favourites.slice();
-    await store.clear();
     resetClear();
+    await store.clear();
     toast('Cleared ' + backup.length + ' favourites', function () {
       store.importAll(backup);
     });
   });
 
   function resetClear() {
-    el.clearBtn.classList.remove('is-confirming');
+    clearTimeout(clearArmTimer);
+    clearTimeout(clearResetTimer);
+    clearState = 'idle';
+    el.clearBtn.classList.remove('is-confirming', 'is-arming', 'is-armed');
     el.clearBtn.textContent = 'Clear all';
   }
 

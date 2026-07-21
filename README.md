@@ -33,9 +33,16 @@ signed into with the same Google account.
   others: pick *Special Hobby* and the scale list collapses to just the scales
   they appear in.
 - **Search** across titles, manufacturers, scales, categories, your own notes — and, once a kit is linked to
-  Scalemates, its subject, era, topic and release year. The search understands common equivalences: "ww1",
-  "great war" and "world war i" all find a kit whose era is *World War I* (without also matching *World War
-  II*), and "planes" matches anything under the *Aircraft* topic.
+  Scalemates, its subject, era, topic and release year. Two tiers work together, indistinguishable in the UI:
+  - *Rules first*: substring matches plus a synonym layer — "ww1", "great war" and "world war i" all find a kit
+    whose era is *World War I* (without also matching *World War II*), "planes" or "biplane" match anything
+    under the *Aircraft* topic, "lorry" finds a truck. These results come first, ordered by how well they fit
+    (whole phrase in the title beats scattered word hits).
+  - *Semantic second*: a small dense-vector model (all-MiniLM-L6-v2, running locally in your browser) embeds
+    each favourite once and ranks the rest of the collection against the query's meaning. Searching
+    "battle of britain" surfaces a Spitfire, "german ww1" a Junkers D.I, "imperial japanese navy" the Yamato —
+    none of which share a word with their query. Anything the rules already found is not repeated; semantic
+    matches are appended below, best first.
 - **Sort** by newest, oldest, title, or price (low–high / high–low).
 - **Notes** — add a private reminder to any kit ("wanted for the winter build", "check postage").
 - **Remove** individual items, or clear the whole list — both undoable.
@@ -70,6 +77,27 @@ The lookups are built to be a considerate guest on Scalemates:
 - the whole feature can be switched off with the **Scalemates** tick-box in the footer.
 
 Please leave the volume low (a handful of kits at a time) — that is what this design assumes.
+
+## The semantic model
+
+The dense-vector layer uses [Transformers.js](https://github.com/huggingface/transformers.js) (vendored in
+`vendor/` — Manifest V3 forbids remote code) running the int8-quantised
+[all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2) sentence-embedding model on WASM, entirely on
+your machine. The model weights (~24 MB) are fetched from the Hugging Face hub the first time the list opens and
+cached by the browser from then on; embedding a favourite takes ~100 ms and each query ~150 ms. Vectors live in
+`chrome.storage.local` (never synced) and are recomputed automatically when a kit's details change.
+
+Design notes, all measured against live model output rather than guessed:
+
+- Each favourite is embedded from a short descriptive sentence — subject, nation, era, topic
+  ("junkers d.i (junkers j 9), short-fuselage version. german world war i propeller aircraft") — because long
+  keyword soups measurably halve similarity scores under mean pooling. Catalogue numbers, scales and years stay
+  out of the vector; exact tokens are the rules tier's job. The nation comes from the Scalemates topic flag,
+  captured during enrichment.
+- A semantic match must clear an absolute similarity floor *and* sit a clear gap above the collection's mean
+  for that query. The gap test is what keeps nonsense out: when nothing truly matches, every similarity
+  compresses into a narrow band and the top item's gap collapses, even though its rank stays first.
+- If the model cannot load (offline first run), search silently falls back to the rules tier alone.
 
 ## Syncing across computers
 
@@ -112,9 +140,10 @@ extension and safe to dismiss.
 | `*://*.kingkit.co.uk/*` | To add the heart overlay to KingKit pages. |
 | `*://*.scalemates.com/*` | To look favourited kits up for release year and subject details. |
 
-There are no analytics and no remote code. The extension talks to exactly two sites: kingkit.co.uk (the overlay,
-thumbnails, and the category fetched after a save) and scalemates.com (the enrichment described above, which can
-be switched off).
+There are no analytics and no remote code. The extension talks to exactly three sites: kingkit.co.uk (the
+overlay, thumbnails, and the category fetched after a save), scalemates.com (the enrichment described above,
+which can be switched off), and huggingface.co (a one-off ~24 MB download of the embedding model's weights,
+cached thereafter — weights are data, not code; the inference code is vendored in this repository).
 
 ## Project layout
 
@@ -124,11 +153,15 @@ src/storage.js        Shared favourites store (content script, worker and manage
 src/content.js        Injects the heart overlay and reads product details off the page
 src/content.css       Overlay and toast styling
 src/scalemates.js     Scalemates lookup engine: title parsing, search parsing, match scoring
+src/semantic.js       Dense-vector layer: embedding text, vector store, cosine search
 src/background.js     Service worker — badge count and the polite Scalemates lookup queue
 src/manager.html/.css/.js   The favourites list, used as both popup and full-tab page
+vendor/               Transformers.js + ONNX WASM runtime (pinned 3.7.6, unmodified)
 test/harness.html     Offline test harness (see below)
 test/sm-fixtures.js   Scalemates HTML fixtures captured from real responses
+test/make-manager-harness.py  Generates a browser harness for the manager UI
 tools/make-icons.ps1  Regenerates the PNG icons
+tools/serve.py        Test server with correct .mjs/.wasm MIME types
 ```
 
 ### How it hooks into the site
@@ -172,11 +205,13 @@ the sync-quota fallback, storage migration, vocabulary harvesting, facet capture
 needs to be served over HTTP rather than opened as a file:
 
 ```sh
-python -m http.server 8000      # from the repository root
+python tools/serve.py 8000      # from the repository root
 ```
 
 Then open <http://127.0.0.1:8000/test/harness.html>. Results are listed on the page, and a summary is available
-as `window.__testSummary` in the console.
+as `window.__testSummary` in the console. For the manager UI, generate its harness first
+(`python test/make-manager-harness.py`) and open <http://127.0.0.1:8000/test/manager-harness.html> — with
+network access it loads the real embedding model, so semantic search can be exercised end to end.
 
 ### Regenerating the icons
 
@@ -203,3 +238,11 @@ load from kingkit.co.uk.
 often aren't on Scalemates), or lookups are switched off, or the queue is in its post-throttle pause. To link it
 by hand: pencil icon → paste the Scalemates kit URL → Save. Pasting a different URL replaces a wrong link;
 clearing the field removes it and lets the automatic lookup try again.
+
+## Licence
+
+[MIT](LICENSE) © 2026 Finn Newick.
+
+The `vendor/` directory contains unmodified builds of
+[Transformers.js](https://github.com/huggingface/transformers.js) and the ONNX Runtime WASM backend, which are
+licensed separately under Apache-2.0 and MIT respectively.

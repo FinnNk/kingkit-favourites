@@ -13,3 +13,6 @@ dist/
 
 # Node (only if tooling is ever added)
 node_modules/
+
+# Generated test harness (regenerate with test/make-manager-harness.py)
+test/manager-harness.html

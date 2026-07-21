@@ -219,6 +219,52 @@
     return sim === undefined ? -1 : sim;
   }
 
+  /**
+   * DevTools-only visibility into the two search tiers (the UI deliberately
+   * does not distinguish them). Logged at debug level — enable "Verbose" in
+   * the console filter to see it. One line per settled result set.
+   */
+  var lastSearchLog = '';
+  function logSearchTiers(query, rules, tail) {
+    var mean = null;
+    if (state.semantic.query === query && state.semantic.sims.size) {
+      var values = Array.from(state.semantic.sims.values());
+      mean = values.reduce(function (a, b) { return a + b; }, 0) / values.length;
+    }
+
+    var lines = ['[KingKit Favourites] search "' + query + '"'];
+    lines.push('  rules (' + rules.length + '):');
+    rules.forEach(function (f) {
+      lines.push('    relevancy ' + relevancy(f, query).toFixed(1).padStart(5) + '  ' + f.title);
+    });
+    if (state.semantic.query !== query) {
+      lines.push('  semantic: pending…');
+    } else {
+      lines.push('  semantic (' + tail.length + ' accepted; floor ' + SEM_FLOOR +
+        ', gap ' + SEM_GAP + ' over mean ' + (mean === null ? 'n/a' : mean.toFixed(3)) + '):');
+      tail.forEach(function (f) {
+        lines.push('    cosine ' + semanticSim(f).toFixed(3) + '  ' + f.title);
+      });
+      // The best rejections explain why something is absent.
+      var shown = new Set(rules.concat(tail).map(function (f) { return f.id; }));
+      var rejected = state.favourites.filter(function (f) {
+        return !shown.has(f.id) && semanticSim(f) >= 0;
+      }).sort(function (a, b) { return semanticSim(b) - semanticSim(a); }).slice(0, 3);
+      if (rejected.length) {
+        lines.push('  nearest rejected:');
+        rejected.forEach(function (f) {
+          lines.push('    cosine ' + semanticSim(f).toFixed(3) + '  ' + f.title);
+        });
+      }
+    }
+
+    var text = lines.join('\n');
+    if (text !== lastSearchLog) {
+      lastSearchLog = text;
+      console.debug(text);
+    }
+  }
+
   /** Ids passing the floor + z-score acceptance for the current query. */
   function acceptedSemanticIds() {
     if (state.semantic.query !== state.query.trim().toLowerCase()) return new Set();
@@ -451,6 +497,7 @@
         return relevancy(b, query) - relevancy(a, query);
       });
       searched = rules.concat(tail);
+      logSearchTiers(query, rules, tail);
     }
 
     renderFilters(searched);

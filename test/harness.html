@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>KingKit Favourites — harness</title>
+<link rel="stylesheet" href="../src/content.css">
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0; padding: 16px; background: #fff; }
+  .pad15 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1000px; }
+  .prodtile { border: 1px solid #ddd; padding: 8px; }
+  .product-tile { display: block; color: #222; text-decoration: none; }
+  .product-media img { width: 100%; display: block; background: #eee; aspect-ratio: 1; }
+  .product-title { font-size: 13px; margin: 8px 0 4px; }
+  .product-details, .price-block { font-size: 12px; color: #555; }
+  .price-current { font-weight: 700; color: #111; }
+  .price-old { text-decoration: line-through; color: #888; }
+  .product-page { max-width: 1000px; margin-top: 40px; border-top: 3px solid #333; padding-top: 20px; }
+  .product-main-image { position: relative; overflow: hidden; max-width: 420px; }
+  .product-main-image img { width: 100%; display: block; background: #eee; aspect-ratio: 3/2; }
+  #results { margin-top: 30px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre; }
+  .ok { color: #15803d; } .fail { color: #b91c1c; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<h2>Search grid</h2>
+<div class="pad15">
+  <div class="prodtile product-grid marbot20 ">
+    <a class="product-tile" href="https://www.kingkit.co.uk/product/takom-1-16-01013-yamato-anchors">
+      <div class="product-media">
+        <img class="img-responsive" alt="TAKOM 1/16 01013 JAPANESE NAVY BATTLESHIP YAMATO ANCHORS - SPECIAL OFFER PRICE" src="https://www.kingkit.co.uk/uploads/shop/medium/TAK01013SPECIAL.jpg" loading="lazy">
+      </div>
+      <div class="product-body">
+        <h3 class="product-title">TAKOM 1/16 01013 JAPANESE NAVY BATTLESHIP YAMATO ANCHORS - SPECIAL OFFER PRICE</h3>
+        <div class="product-details">1/16 Scale</div>
+        <div class="price-block">
+          <div class="price-row"><span class="price-label">New</span><span class="price-values"><span class="price-old">£39.99</span><span class="price-current">£19.99</span></span></div>
+          <div class="price-row"><span class="price-label">Pre-owned</span><span class="price-values"><span class="stock-note">Out of stock</span></span></div>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="prodtile product-grid marbot20 ">
+    <a class="product-tile" href="https://www.kingkit.co.uk/product/special-hobby-1-48-sh48206-fiat-g-50">
+      <div class="product-media">
+        <img class="img-responsive" alt="SPECIAL HOBBY 1/48 SH48206 FIAT G.50" src="https://www.kingkit.co.uk/uploads/shop/medium/SH48206.jpg" loading="lazy">
+      </div>
+      <div class="product-body">
+        <h3 class="product-title">SPECIAL HOBBY 1/48 SH48206 FIAT G.50</h3>
+        <div class="product-details">1/48 Scale</div>
+        <div class="price-block">
+          <div class="price-row"><span class="price-label">New</span><span class="price-values"><span class="price-current">£32.50</span></span></div>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="prodtile product-grid marbot20 ">
+    <a class="product-tile" href="https://www.kingkit.co.uk/product/academy-1-48-18138-p-47d">
+      <div class="product-media">
+        <img class="img-responsive" alt="ACADEMY 1/48 18138 P-47D THUNDERBOLT" src="https://www.kingkit.co.uk/uploads/shop/medium/ACA18138SP.jpg" loading="lazy">
+      </div>
+      <div class="product-body">
+        <h3 class="product-title">ACADEMY 1/48 18138 P-47D THUNDERBOLT</h3>
+        <div class="product-details">1/48 Scale</div>
+        <div class="price-block">
+          <div class="price-row"><span class="price-label">Pre-owned</span><span class="price-values"><span class="price-current">£8.99</span></span></div>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+
+<div class="product-page">
+  <h2>Product page</h2>
+  <div class="row">
+    <div class="col-md-6 col-sm-6">
+      <div class="product-main-image" style="position: relative; overflow: hidden;">
+        <a href="/uploads/shop/large/TAK01013SPECIAL.jpg"><img src="https://www.kingkit.co.uk/uploads/shop/large/TAK01013SPECIAL.jpg" class="img-responsive" alt="TAKOM 01013 Model Ships Kits"></a>
+        <img src="https://www.kingkit.co.uk/uploads/shop/large/TAK01013SPECIAL.jpg" class="zoomImg" style="position:absolute;top:0;left:0;opacity:0;width:1000px;height:658px;max-width:none;">
+      </div>
+    </div>
+    <div class="col-md-6 col-sm-6">
+      <h1>TAKOM 1/16 01013 JAPANESE NAVY BATTLESHIP YAMATO ANCHORS - SPECIAL OFFER PRICE</h1>
+      <div class="price-availability-block clearfix">
+        <div class="price" style="width:100%;">
+          <div class="col-xs-12 col-sm-6 padleft0 newpriceblock">
+            <form action="/basket" method="post">
+              <input type="hidden" name="action" value="basketadd">
+              <input type="hidden" name="ptype" value="new">
+              <input type="hidden" name="product_id" value="99572">
+              <div class="priceheight">
+                <small style="font-weight:bold"><strike>Buy New <span style="font-size:14px;">£39.99</span></strike></small><br>
+                <p class="saleprice">Now only <span>£19.99</span></p>
+              </div>
+              <p class="instock">3 in stock</p>
+            </form>
+          </div>
+          <div class="col-xs-12 col-sm-6 mobpadleft0 padright0">
+            <form action="/basket" method="post">
+              <input type="hidden" name="ptype" value="preowned">
+              <input type="hidden" name="product_id" value="99572">
+              <div class="priceheight">
+                <span class="rrpprice">Pre-owned <span style="font-size:20px;">£14.50</span></span>
+                <p class="saleprice"></p>
+              </div>
+              <p class="instock">1 in stock</p>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <ol class="breadcrumb"><li><a href="/">Home</a></li><li><a href="/c/ships">Model Ships Kits</a></li><li>TAKOM 01013</li></ol>
+</div>
+
+<div id="results">running…</div>
+
+<script src="mock-chrome.js"></script>
+<script src="../src/storage.js"></script>
+<script src="../src/content.js"></script>
+<script src="tests.js"></script>
+</body>
+</html>

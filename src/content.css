@@ -1,0 +1,181 @@
+/*
+ * Overlay styles injected into kingkit.co.uk.
+ *
+ * The site runs Bootstrap 3, which styles bare <button> elements, so the
+ * layout-critical declarations are marked !important to stop theme rules from
+ * dislodging the overlay. Everything else is left overridable.
+ */
+
+.kkf-host {
+  position: relative !important;
+}
+
+.kkf-btn {
+  position: absolute !important;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 34px;
+  height: 34px;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.94) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  color: #6b7280;
+  font: 600 13px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.88);
+  transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease,
+    background-color 0.15s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Unobtrusive by default: reveal on tile hover, on keyboard focus, or when the
+   item is already saved (so a saved kit is obvious while scanning results). */
+.kkf-host:hover > .kkf-btn,
+.kkf-host:focus-within > .kkf-btn,
+.kkf-btn:focus-visible,
+.kkf-btn.is-fav {
+  opacity: 1;
+  transform: none;
+}
+
+.kkf-btn:hover {
+  background: #fff !important;
+  color: #e11d48;
+  transform: scale(1.06);
+}
+
+.kkf-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.kkf-btn.is-fav {
+  color: #e11d48;
+}
+
+.kkf-btn.is-busy {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.kkf-heart {
+  width: 19px;
+  height: 19px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linejoin: round;
+  transition: fill 0.15s ease;
+}
+
+.kkf-btn.is-fav .kkf-heart {
+  fill: currentColor;
+}
+
+/* Hero button on a product page: always visible, labelled. */
+.kkf-btn--large {
+  width: auto;
+  height: 38px;
+  padding: 0 14px 0 12px !important;
+  opacity: 1;
+  transform: none;
+  top: 12px;
+  right: 12px;
+}
+
+.kkf-btn--large .kkf-heart {
+  width: 17px;
+  height: 17px;
+}
+
+.kkf-btn__label {
+  white-space: nowrap;
+  color: #374151;
+}
+
+.kkf-btn--large.is-fav .kkf-btn__label {
+  color: #e11d48;
+}
+
+.kkf-pop {
+  animation: kkf-pop 0.32s ease;
+}
+
+@keyframes kkf-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+
+/* Touch devices have no hover, so keep the control faintly visible. */
+@media (hover: none) {
+  .kkf-btn {
+    opacity: 0.85;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kkf-btn,
+  .kkf-heart,
+  .kkf-toast {
+    transition: none !important;
+  }
+  .kkf-pop {
+    animation: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------- toast */
+
+.kkf-toast {
+  position: fixed !important;
+  left: 50%;
+  bottom: 24px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(90vw, 420px);
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: #111827;
+  color: #f9fafb;
+  font: 500 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+  opacity: 0;
+  transform: translate(-50%, 12px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: auto;
+}
+
+.kkf-toast.is-in {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.kkf-toast__undo {
+  flex: none;
+  padding: 4px 10px !important;
+  border: 1px solid rgba(249, 250, 251, 0.35) !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: #fca5a5 !important;
+  font: 600 13px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+}
+
+.kkf-toast__undo:hover {
+  background: rgba(249, 250, 251, 0.12) !important;
+}
